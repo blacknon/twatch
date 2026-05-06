@@ -28,12 +28,6 @@ you move back through history later, similar to `hwatch`.
 cargo build --release
 ```
 
-## Notes
-
-- Mouse support is implemented, but behavior still depends on the child TUI and
-  the mouse protocol it enables.
-- Snapshot save defaults to `/tmp`, and text output keeps ANSI color escapes.
-
 ## Usage
 
 ### Command
@@ -110,3 +104,17 @@ twatch htop
 twatch htop
 # press *
 ```
+
+## Related Projects
+
+These projects explore similar terminal wrapping and history-oriented workflows.
+
+- [hwatch](https://github.com/blacknon/hwatch): the history-focused watch tool that informs the search, diff, and navigation experience.
+- [baeru](https://github.com/blacknon/baeru): an earlier TUI wrapper project based on the same core idea.
+- [twrap](https://github.com/blacknon/twrap): the terminal wrapper foundation that inspired the PTY capture and replay model here.
+
+## Notes
+
+- Mouse support is implemented, but behavior still depends on the child TUI and
+  the mouse protocol it enables.
+- Snapshot save defaults to `/tmp`, and text output keeps ANSI color escapes.
