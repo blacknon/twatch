@@ -18,6 +18,12 @@ pub struct Cli {
     #[arg(short = 'l', long)]
     pub logfile: Option<String>,
 
+    #[arg(long, default_value = "/tmp")]
+    pub screenshot_dir: String,
+
+    #[arg(long, value_enum, default_value_t = ScreenshotFormatArg::Text)]
+    pub screenshot_format: ScreenshotFormatArg,
+
     #[arg(short = 's', long, default_value = "sh -c")]
     pub shell: String,
 
@@ -42,4 +48,11 @@ pub enum DiffModeArg {
     #[default]
     None,
     Watch,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum ScreenshotFormatArg {
+    #[default]
+    Text,
+    Svg,
 }

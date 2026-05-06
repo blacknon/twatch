@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
+use regex::Regex;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::diff::{LineDiff, WordDiff, diff_lines, diff_words};
@@ -163,6 +164,19 @@ impl HistoryStore {
                 .iter()
                 .any(|line| line.to_lowercase().contains(&needle))
             {
+                matches.push(index);
+            }
+        }
+        Ok(matches)
+    }
+
+    pub fn find_by_regex(&self, regex: &Regex) -> Result<Vec<usize>> {
+        let mut matches = Vec::new();
+        for index in 0..self.entries.len() {
+            let Some(snapshot) = self.snapshot(index)? else {
+                continue;
+            };
+            if snapshot.lines().iter().any(|line| regex.is_match(line)) {
                 matches.push(index);
             }
         }
@@ -375,6 +389,26 @@ mod tests {
 
         assert_eq!(history.find_by_query("jobs").unwrap(), vec![0, 1]);
         assert_eq!(history.stats().compressed_entries, 2);
+    }
+
+    #[test]
+    fn supports_regex_search() {
+        let mut history = HistoryStore::new(2, false);
+        history
+            .push(
+                ScreenSnapshot::from_text_lines(20, 1, &["worker-01 running"]),
+                meta("a"),
+            )
+            .unwrap();
+        history
+            .push(
+                ScreenSnapshot::from_text_lines(20, 1, &["worker-02 failed"]),
+                meta("b"),
+            )
+            .unwrap();
+
+        let regex = regex::Regex::new(r"worker-\d{2} failed").unwrap();
+        assert_eq!(history.find_by_regex(&regex).unwrap(), vec![1]);
     }
 
     #[test]

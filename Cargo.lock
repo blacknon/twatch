@@ -875,6 +875,7 @@ dependencies = [
  "serde_json",
  "shell-words",
  "time",
+ "unicode-width 0.1.14",
  "vt100",
 ]
 

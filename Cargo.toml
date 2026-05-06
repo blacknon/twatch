@@ -2,8 +2,11 @@
 name = "twatch"
 version = "0.1.0"
 edition = "2024"
-description = "twatch"
+description = "Wrap a child TUI app and keep navigable screen history"
 license = "MIT"
+readme = "README.md"
+keywords = ["tui", "terminal", "watch", "pty", "history"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 anyhow = "1.0"
@@ -17,4 +20,5 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 shell-words = "1.1"
 time = { version = "0.3", features = ["formatting", "local-offset", "macros"] }
+unicode-width = "0.1"
 vt100 = "0.15"

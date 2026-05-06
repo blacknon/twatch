@@ -4,8 +4,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::{Frame, widgets::Widget};
+use regex::Regex;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::app::{App, DiffMode, FocusPane};
+use crate::app::{App, DiffMode, FilterMode, FocusPane};
 use crate::screen::{Cell, ScreenSnapshot};
 
 const HEADER_BG: Color = Color::Indexed(234);
@@ -108,14 +110,34 @@ fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     let filter_label = if app.is_search_mode() {
         if app.filter_query.is_empty() {
-            "Filter: /".to_string()
+            format!(
+                "Filter: {}",
+                match app.filter_mode() {
+                    FilterMode::Plain => "/",
+                    FilterMode::Regex => "*",
+                }
+            )
         } else {
-            format!("Filter: /{}", app.filter_query)
+            format!(
+                "Filter: {}{}",
+                match app.filter_mode() {
+                    FilterMode::Plain => "/",
+                    FilterMode::Regex => "*",
+                },
+                app.filter_query
+            )
         }
     } else if app.filter_query.is_empty() {
         "Filter".to_string()
     } else {
-        format!("Filter: {}", app.filter_query)
+        format!(
+            "Filter: {}{}",
+            match app.filter_mode() {
+                FilterMode::Plain => "/",
+                FilterMode::Regex => "*",
+            },
+            app.filter_query
+        )
     };
     let input_hint_long = if app.app_input_mode {
         " | Input: app mode, Ctrl-g to return"
@@ -149,6 +171,7 @@ fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect) {
         &filter_label,
         input_hint_long,
         input_hint_short,
+        app.status_message.as_deref(),
         available_left.saturating_sub(1),
     );
     let left = Line::from(vec![Span::styled(
@@ -203,15 +226,23 @@ fn gap(bg: Color) -> Span<'static> {
 }
 
 fn badge_width(label: &str) -> usize {
-    label.chars().count() + 2
+    UnicodeWidthStr::width(label) + 2
 }
 
 fn fit_header_left(
     filter_label: &str,
     long_hint: &str,
     short_hint: &str,
+    status_hint: Option<&str>,
     max_width: usize,
 ) -> String {
+    if let Some(status_hint) = status_hint {
+        let status = format!("{filter_label} | {status_hint}");
+        if display_width(&status) <= max_width {
+            return status;
+        }
+    }
+
     let long = format!("{filter_label}{long_hint}");
     if display_width(&long) <= max_width {
         return long;
@@ -236,7 +267,7 @@ fn truncate_text(text: &str, max_width: usize) -> String {
     let keep = max_width.saturating_sub(1);
     let mut out = String::new();
     for ch in text.chars() {
-        if out.chars().count() >= keep {
+        if display_width(&out) + UnicodeWidthChar::width(ch).unwrap_or(0) > keep {
             break;
         }
         out.push(ch);
@@ -246,7 +277,7 @@ fn truncate_text(text: &str, max_width: usize) -> String {
 }
 
 fn display_width(text: &str) -> usize {
-    text.chars().count()
+    UnicodeWidthStr::width(text)
 }
 
 fn draw_watch(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -264,6 +295,7 @@ fn draw_watch(frame: &mut Frame<'_>, app: &App, area: Rect) {
             diff_mode: app.diff_mode,
             diff_only: app.diff_only,
             search_query: &app.filter_query,
+            filter_mode: app.filter_mode(),
             vertical_scroll: app.watch_scroll,
             horizontal_scroll: app.horizontal_scroll,
         }
@@ -359,6 +391,11 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("Up/Down       child app in watch pane / move history"),
         Line::from("Backspace     toggle history pane"),
         Line::from("/             search history"),
+        Line::from("*             regex filter history"),
+        Line::from("D             delete selected history"),
+        Line::from("X             clear history except selected"),
+        Line::from("s             cycle snapshot format (text/svg)"),
+        Line::from("S             save selected snapshot"),
         Line::from("d / 0 1       diff mode"),
         Line::from("p             pause history capture"),
         Line::from("Alt+Left/Right horizontal scroll"),
@@ -400,6 +437,7 @@ struct WatchWidget<'a> {
     diff_mode: DiffMode,
     diff_only: bool,
     search_query: &'a str,
+    filter_mode: FilterMode,
     vertical_scroll: usize,
     horizontal_scroll: usize,
 }
@@ -414,7 +452,7 @@ impl Widget for WatchWidget<'_> {
         let search = if self.search_query.is_empty() {
             None
         } else {
-            Some(self.search_query.to_lowercase())
+            Some(self.search_query)
         };
 
         let mut visible_row = 0u16;
@@ -442,7 +480,7 @@ impl WatchWidget<'_> {
     ) {
         let plain = self.snapshot.plain_line(row);
         let search_matches = search
-            .map(|needle| find_char_matches(&plain, needle))
+            .map(|needle| find_char_matches(&plain, needle, self.filter_mode))
             .unwrap_or_default();
 
         let mut x = 0u16;
@@ -530,19 +568,36 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-fn find_char_matches(line: &str, needle: &str) -> Vec<usize> {
-    let lower = line.to_lowercase();
-    let mut result = Vec::new();
-    let mut byte_offset = 0usize;
+fn find_char_matches(line: &str, needle: &str, filter_mode: FilterMode) -> Vec<usize> {
+    match filter_mode {
+        FilterMode::Plain => {
+            let lower = line.to_lowercase();
+            let needle = needle.to_lowercase();
+            let mut result = Vec::new();
+            let mut byte_offset = 0usize;
 
-    while let Some(found) = lower[byte_offset..].find(needle) {
-        let start = byte_offset + found;
-        let end = start + needle.len();
-        let start_char = lower[..start].chars().count();
-        let end_char = lower[..end].chars().count();
-        result.extend(start_char..end_char);
-        byte_offset = end;
+            while let Some(found) = lower[byte_offset..].find(&needle) {
+                let start = byte_offset + found;
+                let end = start + needle.len();
+                let start_char = lower[..start].chars().count();
+                let end_char = lower[..end].chars().count();
+                result.extend(start_char..end_char);
+                byte_offset = end;
+            }
+
+            result
+        }
+        FilterMode::Regex => {
+            let Ok(regex) = Regex::new(needle) else {
+                return Vec::new();
+            };
+            let mut result = Vec::new();
+            for found in regex.find_iter(line) {
+                let start_char = line[..found.start()].chars().count();
+                let end_char = line[..found.end()].chars().count();
+                result.extend(start_char..end_char);
+            }
+            result
+        }
     }
-
-    result
 }

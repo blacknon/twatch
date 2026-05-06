@@ -5,4 +5,5 @@ pub mod history;
 pub mod logging;
 pub mod runner;
 pub mod screen;
+pub mod screenshot;
 pub mod ui;
