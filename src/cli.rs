@@ -1,7 +1,7 @@
 use clap::{Parser, ValueEnum};
 
 #[derive(Debug, Clone, Parser)]
-#[command(author, version, about = "TUI watch for terminal apps", long_about = None)]
+#[command(author, version, about = "watch for TUI apps", long_about = None)]
 pub struct Cli {
     #[arg(short = 'n', long, default_value_t = 2.0)]
     pub interval: f64,

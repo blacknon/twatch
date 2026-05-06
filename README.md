@@ -32,8 +32,30 @@ cargo build --release
 
 ### Command
 
-```bash
-twatch htop
+```text
+$ twatch --help
+TUI watch for terminal apps
+
+Usage: twatch [OPTIONS] [COMMAND]...
+
+Arguments:
+  [COMMAND]...
+
+Options:
+  -n, --interval <INTERVAL>                        [default: 2]
+  -b, --batch
+  -A, --aftercommand <AFTERCOMMAND>
+  -C, --compress
+  -l, --logfile <LOGFILE>
+      --screenshot-dir <SCREENSHOT_DIR>            [default: /tmp]
+      --screenshot-format <SCREENSHOT_FORMAT>      [default: text] [possible values: text, svg]
+  -s, --shell <SHELL>                              [default: "sh -c"]
+  -d, --differences <DIFFERENCES>                  [default: none] [possible values: none, watch]
+  -L, --limit <LIMIT>                              [default: 500]
+      --checkpoint-interval <CHECKPOINT_INTERVAL>  [default: 12]
+      --demo
+  -h, --help                                       Print help
+  -V, --version                                    Print version
 ```
 
 ### Keybind

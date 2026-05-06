@@ -2,7 +2,7 @@
 name = "twatch"
 version = "0.1.0"
 edition = "2024"
-description = "Wrap a child TUI app and keep navigable screen history"
+description = "twatch: Wrap a child TUI app and keep navigable screen history"
 license = "MIT"
 readme = "README.md"
 keywords = ["tui", "terminal", "watch", "pty", "history"]
