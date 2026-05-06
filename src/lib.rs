@@ -1,3 +1,8 @@
+pub mod app;
+pub mod cli;
 pub mod diff;
 pub mod history;
+pub mod logging;
+pub mod runner;
 pub mod screen;
+pub mod ui;

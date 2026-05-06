@@ -1,27 +1,77 @@
 use std::fmt;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct Style {
-    pub bold: bool,
-    pub inverted: bool,
+use ratatui::style::{Color, Modifier, Style as TuiStyle};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub enum TermColor {
+    #[default]
+    Default,
+    Indexed(u8),
+    Rgb(u8, u8, u8),
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Cell {
-    pub ch: char,
-    pub style: Style,
-}
-
-impl Default for Cell {
-    fn default() -> Self {
-        Self {
-            ch: ' ',
-            style: Style::default(),
+impl TermColor {
+    pub fn to_ratatui(self) -> Color {
+        match self {
+            Self::Default => Color::Reset,
+            Self::Indexed(index) => Color::Indexed(index),
+            Self::Rgb(r, g, b) => Color::Rgb(r, g, b),
         }
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Style {
+    pub fg: TermColor,
+    pub bg: TermColor,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub inverted: bool,
+}
+
+impl Style {
+    pub fn to_ratatui(self) -> TuiStyle {
+        let mut style = TuiStyle::default()
+            .fg(self.fg.to_ratatui())
+            .bg(self.bg.to_ratatui());
+        if self.bold {
+            style = style.add_modifier(Modifier::BOLD);
+        }
+        if self.italic {
+            style = style.add_modifier(Modifier::ITALIC);
+        }
+        if self.underline {
+            style = style.add_modifier(Modifier::UNDERLINED);
+        }
+        if self.inverted {
+            style = style.add_modifier(Modifier::REVERSED);
+        }
+        style
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Cell {
+    pub symbol: String,
+    pub style: Style,
+}
+
+impl Cell {
+    pub fn blank() -> Self {
+        Self {
+            symbol: " ".to_string(),
+            style: Style::default(),
+        }
+    }
+
+    pub fn is_blank(&self) -> bool {
+        self.symbol.trim().is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ScreenSnapshot {
     width: u16,
     height: u16,
@@ -34,7 +84,7 @@ impl ScreenSnapshot {
         Self {
             width,
             height,
-            cells: vec![Cell::default(); len],
+            cells: vec![Cell::blank(); len],
         }
     }
 
@@ -47,7 +97,7 @@ impl ScreenSnapshot {
                     x as u16,
                     y as u16,
                     Cell {
-                        ch,
+                        symbol: ch.to_string(),
                         style: Style::default(),
                     },
                 );
@@ -77,7 +127,7 @@ impl ScreenSnapshot {
         for y in 0..max_height {
             for x in 0..max_width {
                 if let Some(cell) = self.cell(x, y) {
-                    resized.set_cell(x, y, *cell);
+                    resized.set_cell(x, y, cell.clone());
                 }
             }
         }
@@ -97,14 +147,21 @@ impl ScreenSnapshot {
 
     pub fn lines(&self) -> Vec<String> {
         (0..self.height)
-            .map(|y| {
-                let mut line = String::with_capacity(usize::from(self.width));
-                for x in 0..self.width {
-                    line.push(self.cell(x, y).copied().unwrap_or_default().ch);
-                }
-                line.trim_end_matches(' ').to_string()
-            })
+            .map(|y| self.plain_line(y).trim_end_matches(' ').to_string())
             .collect()
+    }
+
+    pub fn plain_line(&self, y: u16) -> String {
+        let mut line = String::with_capacity(usize::from(self.width));
+        for x in 0..self.width {
+            let cell = self.cell(x, y).cloned().unwrap_or_else(Cell::blank);
+            if cell.symbol.is_empty() {
+                line.push(' ');
+            } else {
+                line.push_str(&cell.symbol);
+            }
+        }
+        line
     }
 
     pub fn batch_render(&self, header_lines: &[impl AsRef<str>]) -> String {
@@ -140,7 +197,7 @@ impl ScreenSnapshot {
     pub(crate) fn apply_changes(&mut self, changes: &[(usize, Cell)]) {
         for (idx, cell) in changes {
             if *idx < self.cells.len() {
-                self.cells[*idx] = *cell;
+                self.cells[*idx] = cell.clone();
             }
         }
     }
@@ -166,7 +223,7 @@ mod tests {
             0,
             0,
             Cell {
-                ch: 'a',
+                symbol: "a".to_string(),
                 style: Style::default(),
             },
         );
@@ -174,7 +231,7 @@ mod tests {
             1,
             0,
             Cell {
-                ch: 'b',
+                symbol: "b".to_string(),
                 style: Style::default(),
             },
         );
