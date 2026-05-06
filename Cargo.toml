@@ -1,0 +1,8 @@
+[package]
+name = "twatch"
+version = "0.0.0"
+edition = "2024"
+description = "twatch"
+license = "MIT"
+
+[dependencies]
