@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -31,6 +32,7 @@ pub trait FrameSource {
     fn send_mouse(&mut self, event: MouseEvent, body_row_offset: u16) -> Result<()>;
     fn has_pending_update(&self) -> bool;
     fn is_event_driven(&self) -> bool;
+    fn take_update_receiver(&mut self) -> Option<Receiver<()>>;
     fn terminate(&mut self) -> Result<()>;
 }
 
@@ -46,6 +48,7 @@ pub struct PtyRunner {
     aftercommand: Option<String>,
     last_snapshot: Option<ScreenSnapshot>,
     last_size: (u16, u16),
+    update_rx: Option<Receiver<()>>,
 }
 
 pub struct DemoRunner {
@@ -89,7 +92,8 @@ impl PtyRunner {
             parser: vt100::Parser::new(height.max(1), width.max(1), SCROLLBACK_LINES),
         }));
         let dirty = Arc::new(AtomicBool::new(true));
-        start_reader_thread(state.clone(), dirty.clone(), reader);
+        let (update_tx, update_rx) = mpsc::sync_channel(1);
+        start_reader_thread(state.clone(), dirty.clone(), reader, update_tx);
 
         let (shell_program, shell_args) = parse_shell(shell);
 
@@ -105,6 +109,7 @@ impl PtyRunner {
             aftercommand,
             last_snapshot: None,
             last_size: (width.max(1), height.max(1)),
+            update_rx: Some(update_rx),
         })
     }
 
@@ -252,7 +257,7 @@ impl FrameSource for PtyRunner {
         };
         let mut writer = self.writer.lock().expect("writer poisoned");
         writer
-            .write_all(bytes.as_bytes())
+            .write_all(&bytes)
             .context("failed to write mouse event to PTY")?;
         writer.flush().ok();
         Ok(())
@@ -270,6 +275,10 @@ impl FrameSource for PtyRunner {
 
     fn is_event_driven(&self) -> bool {
         true
+    }
+
+    fn take_update_receiver(&mut self) -> Option<Receiver<()>> {
+        self.update_rx.take()
     }
 }
 
@@ -337,6 +346,10 @@ impl FrameSource for DemoRunner {
         false
     }
 
+    fn take_update_receiver(&mut self) -> Option<Receiver<()>> {
+        None
+    }
+
     fn terminate(&mut self) -> Result<()> {
         Ok(())
     }
@@ -354,6 +367,7 @@ fn start_reader_thread(
     state: Arc<RwLock<TerminalState>>,
     dirty: Arc<AtomicBool>,
     mut reader: Box<dyn Read + Send>,
+    update_tx: SyncSender<()>,
 ) {
     thread::spawn(move || {
         let mut buffer = [0u8; 8192];
@@ -364,6 +378,10 @@ fn start_reader_thread(
                     let mut state = state.write().expect("terminal state poisoned");
                     state.parser.process(&buffer[..count]);
                     dirty.store(true, Ordering::Relaxed);
+                    match update_tx.try_send(()) {
+                        Ok(()) | Err(TrySendError::Full(())) => {}
+                        Err(TrySendError::Disconnected(())) => break,
+                    }
                 }
                 Err(_) => break,
             }
@@ -495,34 +513,66 @@ fn mouse_to_bytes(
     encoding: vt100::MouseProtocolEncoding,
     event: MouseEvent,
     body_row_offset: u16,
-) -> Option<String> {
+) -> Option<Vec<u8>> {
     if mode == vt100::MouseProtocolMode::None {
-        return None;
-    }
-    if encoding != vt100::MouseProtocolEncoding::Sgr {
         return None;
     }
 
     let x = event.column.saturating_add(1);
     let y = event.row.saturating_sub(body_row_offset).saturating_add(1);
 
-    let (code, suffix) = match event.kind {
+    let mode_name = format!("{mode:?}");
+    let encoding_name = format!("{encoding:?}");
+
+    let (code, sgr_suffix) = match event.kind {
         MouseEventKind::Down(MouseButton::Left) => (0, 'M'),
         MouseEventKind::Down(MouseButton::Middle) => (1, 'M'),
         MouseEventKind::Down(MouseButton::Right) => (2, 'M'),
         MouseEventKind::Up(MouseButton::Left)
         | MouseEventKind::Up(MouseButton::Middle)
-        | MouseEventKind::Up(MouseButton::Right) => (0, 'm'),
-        MouseEventKind::Drag(MouseButton::Left) => (32, 'M'),
-        MouseEventKind::Drag(MouseButton::Middle) => (33, 'M'),
-        MouseEventKind::Drag(MouseButton::Right) => (34, 'M'),
-        MouseEventKind::Moved => (35, 'M'),
+        | MouseEventKind::Up(MouseButton::Right) => (3, 'm'),
+        MouseEventKind::Drag(MouseButton::Left) => {
+            if !supports_drag_tracking(&mode_name) {
+                return None;
+            }
+            (32, 'M')
+        }
+        MouseEventKind::Drag(MouseButton::Middle) => {
+            if !supports_drag_tracking(&mode_name) {
+                return None;
+            }
+            (33, 'M')
+        }
+        MouseEventKind::Drag(MouseButton::Right) => {
+            if !supports_drag_tracking(&mode_name) {
+                return None;
+            }
+            (34, 'M')
+        }
+        MouseEventKind::Moved => return None,
         MouseEventKind::ScrollUp => (64, 'M'),
         MouseEventKind::ScrollDown => (65, 'M'),
         _ => return None,
     };
 
-    Some(format!("\x1b[<{};{};{}{}", code, x, y, suffix))
+    if encoding_name.contains("Sgr") {
+        return Some(format!("\x1b[<{};{};{}{}", code, x, y, sgr_suffix).into_bytes());
+    }
+
+    encode_legacy_mouse(code, x, y)
+}
+
+fn supports_drag_tracking(mode_name: &str) -> bool {
+    mode_name.contains("Motion") || mode_name.contains("Drag")
+}
+
+fn encode_legacy_mouse(code: u16, x: u16, y: u16) -> Option<Vec<u8>> {
+    let x = x.min(223);
+    let y = y.min(223);
+    let cb = u8::try_from(code).ok()?.saturating_add(32);
+    let cx = u8::try_from(x).ok()?.saturating_add(32);
+    let cy = u8::try_from(y).ok()?.saturating_add(32);
+    Some(vec![0x1b, b'[', b'M', cb, cx, cy])
 }
 
 fn time_label() -> String {

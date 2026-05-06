@@ -32,7 +32,8 @@ pub fn append_record(path: &str, record: &LogRecord) -> Result<()> {
         .open(path)
         .with_context(|| format!("failed to open logfile for append: {path}"))?;
     serde_json::to_writer(&mut file, record).context("failed to write log record")?;
-    file.write_all(b"\n").context("failed to terminate log line")?;
+    file.write_all(b"\n")
+        .context("failed to terminate log line")?;
     Ok(())
 }
 

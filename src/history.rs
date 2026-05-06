@@ -51,6 +51,7 @@ pub struct HistoryStore {
     checkpoint_interval: usize,
     compress: bool,
     entries: Vec<HistoryEntry>,
+    last_snapshot: Option<ScreenSnapshot>,
 }
 
 impl HistoryStore {
@@ -59,6 +60,7 @@ impl HistoryStore {
             checkpoint_interval: checkpoint_interval.max(1),
             compress,
             entries: Vec::new(),
+            last_snapshot: None,
         }
     }
 
@@ -73,19 +75,28 @@ impl HistoryStore {
     pub fn push(&mut self, snapshot: ScreenSnapshot, metadata: HistoryMetadata) -> Result<()> {
         let entry = match self.entries.last() {
             None => HistoryEntry {
-                kind: HistoryEntryKind::Checkpoint(store_payload(snapshot, self.compress)?),
+                kind: HistoryEntryKind::Checkpoint(store_checkpoint(
+                    snapshot.clone(),
+                    self.compress,
+                )?),
                 metadata,
             },
             Some(_) if self.entries.len() % self.checkpoint_interval == 0 => HistoryEntry {
-                kind: HistoryEntryKind::Checkpoint(store_payload(snapshot, self.compress)?),
+                kind: HistoryEntryKind::Checkpoint(store_checkpoint(
+                    snapshot.clone(),
+                    self.compress,
+                )?),
                 metadata,
             },
             Some(_) => {
                 let previous = self
-                    .snapshot(self.entries.len() - 1)?
+                    .last_snapshot
+                    .as_ref()
+                    .cloned()
+                    .or_else(|| self.snapshot(self.entries.len() - 1).ok().flatten())
                     .expect("previous snapshot must exist");
                 HistoryEntry {
-                    kind: HistoryEntryKind::Delta(store_payload(
+                    kind: HistoryEntryKind::Delta(store_delta(
                         FrameDelta::between(&previous, &snapshot),
                         self.compress,
                     )?),
@@ -95,10 +106,16 @@ impl HistoryStore {
         };
 
         self.entries.push(entry);
+        self.last_snapshot = Some(snapshot);
         Ok(())
     }
 
     pub fn snapshot(&self, index: usize) -> Result<Option<ScreenSnapshot>> {
+        if index + 1 == self.entries.len() {
+            if let Some(snapshot) = &self.last_snapshot {
+                return Ok(Some(snapshot.clone()));
+            }
+        }
         let entry = match self.entries.get(index) {
             Some(entry) => entry,
             None => return Ok(None),
@@ -241,6 +258,19 @@ impl FrameDelta {
     }
 }
 
+fn store_checkpoint(
+    value: ScreenSnapshot,
+    compress: bool,
+) -> Result<StoredPayload<ScreenSnapshot>> {
+    store_payload(value, compress)
+}
+
+fn store_delta(value: FrameDelta, _compress: bool) -> Result<StoredPayload<FrameDelta>> {
+    // Deltas are already sparse, so compressing each one tends to waste CPU
+    // more than it saves memory. Keep them raw and only compress checkpoints.
+    store_payload(value, false)
+}
+
 fn store_payload<T>(value: T, compress: bool) -> Result<StoredPayload<T>>
 where
     T: Serialize,
@@ -325,17 +355,26 @@ mod tests {
     fn supports_compressed_entries() {
         let mut history = HistoryStore::new(2, true);
         history
-            .push(ScreenSnapshot::from_text_lines(8, 1, &["jobs 10"]), meta("a"))
+            .push(
+                ScreenSnapshot::from_text_lines(8, 1, &["jobs 10"]),
+                meta("a"),
+            )
             .unwrap();
         history
-            .push(ScreenSnapshot::from_text_lines(8, 1, &["jobs 11"]), meta("b"))
+            .push(
+                ScreenSnapshot::from_text_lines(8, 1, &["jobs 11"]),
+                meta("b"),
+            )
             .unwrap();
         history
-            .push(ScreenSnapshot::from_text_lines(8, 1, &["queue 12"]), meta("c"))
+            .push(
+                ScreenSnapshot::from_text_lines(8, 1, &["queue 12"]),
+                meta("c"),
+            )
             .unwrap();
 
         assert_eq!(history.find_by_query("jobs").unwrap(), vec![0, 1]);
-        assert_eq!(history.stats().compressed_entries, 3);
+        assert_eq!(history.stats().compressed_entries, 2);
     }
 
     #[test]

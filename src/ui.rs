@@ -1,22 +1,32 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::{Frame, widgets::Widget};
 
 use crate::app::{App, DiffMode, FocusPane};
 use crate::screen::{Cell, ScreenSnapshot};
 
-const HEADER_BG: Color = Color::Indexed(24);
-const HEADER_SUB_BG: Color = Color::Indexed(238);
+const HEADER_BG: Color = Color::Indexed(234);
+const HEADER_SUB_BG: Color = Color::Indexed(235);
 const PANEL_BG: Color = Color::Indexed(234);
-const BORDER_ACTIVE: Color = Color::Indexed(39);
+const BORDER_ACTIVE: Color = Color::Indexed(45);
 const BORDER_IDLE: Color = Color::Indexed(240);
 const SEARCH_BG: Color = Color::Indexed(220);
 const DIFF_BG: Color = Color::Rgb(238, 238, 238);
 const DIFF_FG: Color = Color::Black;
 const SELECTION_BG: Color = Color::Indexed(24);
+const COMMAND_FG: Color = Color::Indexed(47);
+const COMMAND_ACCENT: Color = Color::Indexed(51);
+const TIMESTAMP_FG: Color = Color::Indexed(51);
+const BADGE_TEXT: Color = Color::Black;
+const BADGE_DIM_TEXT: Color = Color::Indexed(252);
+const BADGE_GREEN: Color = Color::Indexed(46);
+const BADGE_CYAN: Color = Color::Indexed(51);
+const BADGE_BLUE: Color = Color::Indexed(39);
+const BADGE_MAGENTA: Color = Color::Indexed(201);
+const BADGE_GREY: Color = Color::Indexed(238);
 
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
@@ -29,8 +39,8 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
         ])
         .split(area);
 
-    frame.render_widget(header_line_one(app), chunks[0]);
-    frame.render_widget(header_line_two(app), chunks[1]);
+    draw_header_line_one(frame, app, chunks[0]);
+    draw_header_line_two(frame, app, chunks[1]);
 
     draw_watch(frame, app, chunks[2]);
     draw_history_overlay(frame, app, chunks[2]);
@@ -38,35 +48,205 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     if app.show_help {
         draw_help(frame, centered_rect(68, 60, area));
     }
+    if app.show_exit_confirm {
+        draw_exit_confirm(frame, centered_rect(34, 16, area));
+    }
 }
 
-fn header_line_one(app: &App) -> Paragraph<'static> {
-    let left = format!(
-        " twatch [{}] diff:{} focus:{} input:{} interval:{:.1}s history:{}/{} ",
-        if app.paused { "PAUSED" } else { "RUN" },
-        app.diff_mode.label(),
-        app.focus.label(),
-        if app.app_input_mode { "app" } else { "twatch" },
-        app.interval_secs,
-        app.filtered_indices().len(),
-        app.history_len()
+fn draw_header_line_one(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(HEADER_BG)),
+        area,
     );
-    Paragraph::new(left).style(Style::default().fg(Color::White).bg(HEADER_BG))
+
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(10), Constraint::Length(24)])
+        .split(area);
+
+    let cadence = if app.is_event_driven() {
+        "Event".to_string()
+    } else {
+        format!("Every {:>4.3}", app.interval_secs)
+    };
+    let command_line = Line::from(vec![
+        Span::styled(" ", Style::default().bg(HEADER_BG)),
+        Span::styled(cadence, Style::default().fg(Color::White).bg(HEADER_BG)),
+        Span::styled(" ", Style::default().bg(HEADER_BG)),
+        Span::styled(
+            app.command_display().to_string(),
+            Style::default()
+                .fg(COMMAND_FG)
+                .bg(HEADER_BG)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+
+    let timestamp_line = Line::from(vec![Span::styled(
+        format!(
+            " {} ",
+            app.current_label().unwrap_or("---- -- -- --:--:--.---")
+        ),
+        Style::default()
+            .fg(TIMESTAMP_FG)
+            .bg(HEADER_BG)
+            .add_modifier(Modifier::BOLD),
+    )]);
+
+    frame.render_widget(Paragraph::new(command_line), chunks[0]);
+    frame.render_widget(
+        Paragraph::new(timestamp_line).alignment(Alignment::Right),
+        chunks[1],
+    );
 }
 
-fn header_line_two(app: &App) -> Paragraph<'static> {
-    let search = if app.filter_query.is_empty() {
-        "/ search".to_string()
+fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(HEADER_SUB_BG)),
+        area,
+    );
+
+    let filter_label = if app.is_search_mode() {
+        if app.filter_query.is_empty() {
+            "Filter: /".to_string()
+        } else {
+            format!("Filter: /{}", app.filter_query)
+        }
+    } else if app.filter_query.is_empty() {
+        "Filter".to_string()
     } else {
-        format!("search: {}", app.filter_query)
+        format!("Filter: {}", app.filter_query)
     };
-    let help = if app.app_input_mode {
-        "Ctrl-g return | keys/mouse pass through to app"
+    let input_hint_long = if app.app_input_mode {
+        " | Input: app mode, Ctrl-g to return"
     } else {
-        "Tab pane | i app input | Backspace history | d diff | h help | q quit"
+        " | Input: press i to control app"
     };
-    let content = format!(" {search} | {help} ");
-    Paragraph::new(content).style(Style::default().fg(Color::White).bg(HEADER_SUB_BG))
+    let input_hint_short = if app.app_input_mode {
+        " | Ctrl-g to return"
+    } else {
+        " | i to control app"
+    };
+
+    let hist_label = format!(
+        "Hist {}/{} {} {}",
+        format!("{:05}", app.filtered_indices().len()),
+        format!("{:05}", app.history_len()),
+        if app.show_history { "Open" } else { "Close" },
+        if app.follow_latest { "Latest" } else { "Hold" }
+    );
+    let input_label = if app.app_input_mode {
+        "Input On".to_string()
+    } else {
+        "Input Off".to_string()
+    };
+    let diff_label = app.diff_mode.label().to_string();
+    let right_width =
+        badge_width(&hist_label) + 1 + badge_width(&input_label) + 1 + badge_width(&diff_label);
+
+    let available_left = usize::from(area.width).saturating_sub(right_width.saturating_add(1));
+    let left_text = fit_header_left(
+        &filter_label,
+        input_hint_long,
+        input_hint_short,
+        available_left.saturating_sub(1),
+    );
+    let left = Line::from(vec![Span::styled(
+        format!(" {}", left_text),
+        Style::default()
+            .fg(if app.filter_query.is_empty() && !app.is_search_mode() {
+                Color::Indexed(246)
+            } else {
+                COMMAND_ACCENT
+            })
+            .bg(HEADER_SUB_BG),
+    )]);
+
+    let right = Line::from(vec![
+        status_badge(hist_label, BADGE_CYAN, true),
+        gap(HEADER_SUB_BG),
+        status_badge(input_label, BADGE_GREEN, true),
+        gap(HEADER_SUB_BG),
+        status_badge(
+            diff_label,
+            match app.diff_mode {
+                DiffMode::None => BADGE_MAGENTA,
+                DiffMode::Watch => BADGE_BLUE,
+            },
+            true,
+        ),
+    ]);
+
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(0),
+            Constraint::Length(right_width.min(usize::from(area.width)) as u16),
+        ])
+        .split(area);
+
+    frame.render_widget(Paragraph::new(left), chunks[0]);
+    frame.render_widget(Paragraph::new(right).alignment(Alignment::Right), chunks[1]);
+}
+
+fn status_badge<T: Into<String>>(label: T, bg: Color, active: bool) -> Span<'static> {
+    let fg = if active { BADGE_TEXT } else { BADGE_DIM_TEXT };
+    let bg = if active { bg } else { BADGE_GREY };
+    Span::styled(
+        format!("[{}]", label.into()),
+        Style::default().fg(fg).bg(bg).add_modifier(Modifier::BOLD),
+    )
+}
+
+fn gap(bg: Color) -> Span<'static> {
+    Span::styled(" ", Style::default().bg(bg))
+}
+
+fn badge_width(label: &str) -> usize {
+    label.chars().count() + 2
+}
+
+fn fit_header_left(
+    filter_label: &str,
+    long_hint: &str,
+    short_hint: &str,
+    max_width: usize,
+) -> String {
+    let long = format!("{filter_label}{long_hint}");
+    if display_width(&long) <= max_width {
+        return long;
+    }
+
+    let short = format!("{filter_label}{short_hint}");
+    if display_width(&short) <= max_width {
+        return short;
+    }
+
+    truncate_text(filter_label, max_width)
+}
+
+fn truncate_text(text: &str, max_width: usize) -> String {
+    if display_width(text) <= max_width {
+        return text.to_string();
+    }
+    if max_width <= 1 {
+        return String::new();
+    }
+
+    let keep = max_width.saturating_sub(1);
+    let mut out = String::new();
+    for ch in text.chars() {
+        if out.chars().count() >= keep {
+            break;
+        }
+        out.push(ch);
+    }
+    out.push('…');
+    out
+}
+
+fn display_width(text: &str) -> usize {
+    text.chars().count()
 }
 
 fn draw_watch(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -120,7 +300,7 @@ fn draw_history_overlay(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let mut items: Vec<ListItem<'_>> =
         vec![
             ListItem::new(Line::from("  latest")).style(if app.follow_latest {
-                Style::default().fg(Color::Gray).bg(BORDER_ACTIVE)
+                Style::default().fg(Color::White).bg(SELECTION_BG)
             } else {
                 Style::default().fg(BORDER_ACTIVE)
             }),
@@ -128,7 +308,7 @@ fn draw_history_overlay(frame: &mut Frame<'_>, app: &App, area: Rect) {
 
     items.extend(app.filtered_indices().iter().map(|index| {
         let meta = app.history_metadata(*index);
-        let style = if *index == app.selected_index {
+        let style = if !app.follow_latest && *index == app.selected_index {
             Style::default().fg(Color::White).bg(SELECTION_BG)
         } else if meta.changed {
             Style::default().fg(Color::Indexed(221))
@@ -137,7 +317,7 @@ fn draw_history_overlay(frame: &mut Frame<'_>, app: &App, area: Rect) {
         };
         ListItem::new(Line::from(format!(
             "{} {}",
-            if *index == app.selected_index {
+            if !app.follow_latest && *index == app.selected_index {
                 ">"
             } else {
                 " "
@@ -171,7 +351,8 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("twatch keys"),
         Line::from(""),
         Line::from("q             quit"),
-        Line::from("Tab           toggle watch/history pane focus"),
+        Line::from("Ctrl-c        open exit dialog"),
+        Line::from("Tab           switch focus between watch/history"),
         Line::from("i             enter child app input mode"),
         Line::from("Ctrl-g        leave child app input mode"),
         Line::from("Left/Right    focus watch/history"),
@@ -191,6 +372,26 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect) {
         )
         .style(Style::default().fg(Color::White).bg(PANEL_BG));
     frame.render_widget(help, area);
+}
+
+fn draw_exit_confirm(frame: &mut Frame<'_>, area: Rect) {
+    frame.render_widget(Clear, area);
+    let lines = vec![
+        Line::from("Exit hwatch?"),
+        Line::from(""),
+        Line::from("Press 'Y' or 'Q' : Quit."),
+        Line::from("Press 'N' or 'Esc': Stay."),
+    ];
+    let dialog = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Exit ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(BORDER_ACTIVE))
+                .style(Style::default().bg(PANEL_BG)),
+        )
+        .style(Style::default().fg(Color::White).bg(PANEL_BG));
+    frame.render_widget(dialog, area);
 }
 
 struct WatchWidget<'a> {
