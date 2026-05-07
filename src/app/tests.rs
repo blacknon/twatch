@@ -261,6 +261,29 @@ fn stores_frame_metadata_for_history_entries() {
 }
 
 #[test]
+fn forwarded_input_is_recorded_in_frame_metadata() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![
+            frame("a", &["one"]),
+            frame("b", &["two"]),
+            frame("c", &["three"]),
+        ])),
+    )
+    .unwrap();
+
+    app.capture(20, 5).unwrap();
+    app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .unwrap();
+    app.capture(20, 5).unwrap();
+    app.capture(20, 5).unwrap();
+
+    let meta = app.history_metadata(1);
+    assert_eq!(meta.input_event_count_since_prev, 1);
+    assert!(meta.input_summary.contains("Enter"));
+}
+
+#[test]
 fn save_snapshot_uses_configured_directory_and_format() {
     let mut cli = test_cli();
     let dir = unique_temp_dir("twatch-shot-test");

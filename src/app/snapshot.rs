@@ -75,11 +75,13 @@ impl App {
                 changed_cell_count: 0,
                 input_event_count_since_prev: 0,
                 resized: false,
+                input_summary: String::new(),
             },
         );
 
         self.archive_current_snapshot()?;
         self.set_current_snapshot(snapshot, metadata);
+        self.pending_input_events.clear();
 
         if !self.follow_latest && self.history.is_empty() {
             self.follow_latest = true;
@@ -123,7 +125,9 @@ impl App {
         if metadata.frame_seq == 0 {
             metadata.frame_seq = self.next_frame_seq;
         }
-        self.next_frame_seq = self.next_frame_seq.max(metadata.frame_seq.saturating_add(1));
+        self.next_frame_seq = self
+            .next_frame_seq
+            .max(metadata.frame_seq.saturating_add(1));
 
         if metadata.width == 0 {
             metadata.width = snapshot.width();
@@ -136,6 +140,12 @@ impl App {
         if metadata.changed && metadata.changed_cell_count == 0 {
             metadata.changed_cell_count = snapshot.changed_cell_count_since(previous);
         }
+        if metadata.input_event_count_since_prev == 0 {
+            metadata.input_event_count_since_prev = self.pending_input_events.len();
+        }
+        if metadata.input_summary.is_empty() {
+            metadata.input_summary = self.summarize_pending_input_events();
+        }
         metadata.resized = metadata.resized
             || previous.is_some_and(|previous_snapshot| {
                 previous_snapshot.width() != snapshot.width()
@@ -143,6 +153,24 @@ impl App {
             });
 
         metadata
+    }
+
+    fn summarize_pending_input_events(&self) -> String {
+        if self.pending_input_events.is_empty() {
+            return String::new();
+        }
+
+        let mut parts = Vec::new();
+        for event in self.pending_input_events.iter().rev().take(3).rev() {
+            parts.push(event.summary());
+        }
+
+        let suffix = if self.pending_input_events.len() > 3 {
+            format!(" (+{} more)", self.pending_input_events.len() - 3)
+        } else {
+            String::new()
+        };
+        format!("input: {}{}", parts.join(", "), suffix)
     }
 
     pub(super) fn save_snapshot(&mut self) -> Result<()> {

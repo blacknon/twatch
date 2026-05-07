@@ -171,7 +171,9 @@ fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect) {
         &filter_label,
         input_hint_long,
         input_hint_short,
-        app.status_message.as_deref(),
+        app.status_message
+            .as_deref()
+            .or_else(|| app.selected_input_summary()),
         available_left.saturating_sub(1),
     );
     let left = Line::from(vec![Span::styled(
@@ -304,7 +306,7 @@ fn draw_watch(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn draw_history_overlay(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let width = if app.show_history { 44 } else { 2 };
+    let width = if app.show_history { 48 } else { 2 };
     let overlay = Rect::new(
         area.right().saturating_sub(width),
         area.y,
@@ -348,7 +350,7 @@ fn draw_history_overlay(frame: &mut Frame<'_>, app: &App, area: Rect) {
             Style::default().fg(Color::Gray)
         };
         ListItem::new(Line::from(format!(
-            "{} {:04} +{:03} {}x{} {}{}",
+            "{} {:04} +{:03} i{:02} {}x{} {}{}",
             if !app.follow_latest && *index == app.selected_index {
                 ">"
             } else {
@@ -356,6 +358,7 @@ fn draw_history_overlay(frame: &mut Frame<'_>, app: &App, area: Rect) {
             },
             meta.frame_seq,
             meta.changed_cell_count,
+            meta.input_event_count_since_prev,
             meta.width,
             meta.height,
             if meta.resized { "R " } else { "" },

@@ -1,9 +1,11 @@
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 
-use super::{App, DiffMode, FocusPane, InputMode};
+use super::{
+    App, DiffMode, FocusPane, InputMode, InputTargetFocus, InputTraceEvent, InputTraceKind,
+};
 
 impl App {
     pub(super) fn handle_key_event(&mut self, key: KeyEvent) -> Result<bool> {
@@ -37,11 +39,13 @@ impl App {
                 self.app_input_mode = false;
                 return Ok(false);
             }
+            self.record_child_key_event(key);
             self.source.send_key(key)?;
             return Ok(false);
         }
 
         if self.focus == FocusPane::Watch && self.should_passthrough_to_app(key) {
+            self.record_child_key_event(key);
             self.source.send_key(key)?;
             return Ok(false);
         }
@@ -152,6 +156,7 @@ impl App {
         self.last_mouse_input = Some(Instant::now());
 
         if self.app_input_mode {
+            self.record_child_mouse_event(mouse);
             self.source.send_mouse(mouse, 2)?;
             return Ok(false);
         }
@@ -175,6 +180,7 @@ impl App {
                     return Ok(true);
                 } else {
                     self.focus = FocusPane::Watch;
+                    self.record_child_mouse_event(mouse);
                     self.source.send_mouse(mouse, 2)?;
                     return Ok(previous_focus != self.focus);
                 }
@@ -186,6 +192,7 @@ impl App {
                     return Ok(true);
                 } else {
                     self.focus = FocusPane::Watch;
+                    self.record_child_mouse_event(mouse);
                     self.source.send_mouse(mouse, 2)?;
                     return Ok(previous_focus != self.focus);
                 }
@@ -197,6 +204,7 @@ impl App {
                     return Ok(true);
                 } else {
                     self.focus = FocusPane::Watch;
+                    self.record_child_mouse_event(mouse);
                     self.source.send_mouse(mouse, 2)?;
                     return Ok(previous_focus != self.focus);
                 }
@@ -205,6 +213,7 @@ impl App {
             MouseEventKind::Up(_) | MouseEventKind::Drag(_) => {
                 if !over_history {
                     self.focus = FocusPane::Watch;
+                    self.record_child_mouse_event(mouse);
                     self.source.send_mouse(mouse, 2)?;
                     return Ok(previous_focus != self.focus);
                 }
@@ -215,7 +224,7 @@ impl App {
     }
 
     fn history_overlay_start(&self, total_width: u16) -> u16 {
-        let overlay_width = if self.show_history { 30 } else { 2 };
+        let overlay_width = if self.show_history { 48 } else { 2 };
         total_width.saturating_sub(overlay_width)
     }
 
@@ -388,6 +397,39 @@ impl App {
             self.follow_latest = false;
             self.selected_index = index;
             self.sync_follow_latest_with_selection();
+        }
+    }
+
+    pub(super) fn record_child_key_event(&mut self, key: KeyEvent) {
+        self.record_input_event(InputTraceKind::Key {
+            code: key.code,
+            modifiers: key.modifiers,
+        });
+    }
+
+    pub(super) fn record_child_mouse_event(&mut self, mouse: MouseEvent) {
+        self.record_input_event(InputTraceKind::Mouse {
+            kind: mouse.kind,
+            column: mouse.column,
+            row: mouse.row,
+        });
+    }
+
+    fn record_input_event(&mut self, kind: InputTraceKind) {
+        let event = InputTraceEvent {
+            seq: self.next_input_seq,
+            timestamp_unix_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or(Duration::ZERO)
+                .as_millis() as u64,
+            kind,
+            target_focus: InputTargetFocus::Child,
+        };
+        self.next_input_seq += 1;
+        self.pending_input_events.push(event.clone());
+        self.input_trace.push_back(event);
+        while self.input_trace.len() > 256 {
+            self.input_trace.pop_front();
         }
     }
 }

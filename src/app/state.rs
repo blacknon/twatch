@@ -48,6 +48,9 @@ impl App {
             last_tick: Instant::now(),
             last_mouse_input: None,
             next_frame_seq: 1,
+            input_trace: std::collections::VecDeque::with_capacity(256),
+            pending_input_events: Vec::new(),
+            next_input_seq: 1,
         };
 
         app.load_history_from_log()?;
@@ -90,6 +93,19 @@ impl App {
 
     pub fn history_metadata(&self, index: usize) -> &AppHistoryMetadata {
         &self.metadata[index]
+    }
+
+    pub fn selected_input_summary(&self) -> Option<&str> {
+        if self.follow_latest {
+            self.current_metadata
+                .as_ref()
+                .map(|metadata| metadata.input_summary.as_str())
+        } else {
+            self.metadata
+                .get(self.selected_index)
+                .map(|metadata| metadata.input_summary.as_str())
+        }
+        .filter(|summary| !summary.is_empty())
     }
 
     pub fn selected_filtered_position(&self) -> Option<usize> {

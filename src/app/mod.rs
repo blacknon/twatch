@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -7,6 +8,7 @@ use crate::history::HistoryStore;
 use crate::runner::FrameSource;
 use crate::screen::ScreenSnapshot;
 use crate::screenshot::ScreenshotFormat;
+use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 
 mod history_ops;
 mod input;
@@ -78,6 +80,7 @@ pub struct AppHistoryMetadata {
     pub changed_cell_count: usize,
     pub input_event_count_since_prev: usize,
     pub resized: bool,
+    pub input_summary: String,
 }
 
 impl AppHistoryMetadata {
@@ -92,6 +95,7 @@ impl AppHistoryMetadata {
             changed_cell_count: value.changed_cell_count,
             input_event_count_since_prev: value.input_event_count_since_prev,
             resized: value.resized,
+            input_summary: String::new(),
         }
     }
 
@@ -106,6 +110,47 @@ impl AppHistoryMetadata {
             changed_cell_count: self.changed_cell_count,
             input_event_count_since_prev: self.input_event_count_since_prev,
             resized: self.resized,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+struct InputTraceEvent {
+    seq: u64,
+    timestamp_unix_ms: u64,
+    kind: InputTraceKind,
+    target_focus: InputTargetFocus,
+}
+
+#[derive(Clone, Debug)]
+enum InputTraceKind {
+    Key {
+        code: KeyCode,
+        modifiers: KeyModifiers,
+    },
+    Mouse {
+        kind: MouseEventKind,
+        column: u16,
+        row: u16,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InputTargetFocus {
+    Child,
+}
+
+impl InputTraceEvent {
+    fn summary(&self) -> String {
+        match &self.kind {
+            InputTraceKind::Key { code, modifiers } => {
+                let prefix = format_modifiers(*modifiers);
+                format!("{prefix}{}", format_key_code(code))
+            }
+            InputTraceKind::Mouse { kind, column, row } => {
+                format!("{}@{},{}", format_mouse_kind(kind), column, row)
+            }
         }
     }
 }
@@ -144,6 +189,9 @@ pub struct App {
     last_tick: Instant,
     last_mouse_input: Option<Instant>,
     next_frame_seq: u64,
+    input_trace: VecDeque<InputTraceEvent>,
+    pending_input_events: Vec<InputTraceEvent>,
+    next_input_seq: u64,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -164,5 +212,68 @@ impl From<ScreenshotFormatArg> for ScreenshotFormat {
             ScreenshotFormatArg::Text => Self::Text,
             ScreenshotFormatArg::Svg => Self::Svg,
         }
+    }
+}
+
+fn format_modifiers(modifiers: KeyModifiers) -> String {
+    let mut parts = Vec::new();
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        parts.push("Ctrl");
+    }
+    if modifiers.contains(KeyModifiers::ALT) {
+        parts.push("Alt");
+    }
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        parts.push("Shift");
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("{}+", parts.join("+"))
+    }
+}
+
+fn format_key_code(code: &KeyCode) -> String {
+    match code {
+        KeyCode::Backspace => "Backspace".to_string(),
+        KeyCode::Enter => "Enter".to_string(),
+        KeyCode::Left => "Left".to_string(),
+        KeyCode::Right => "Right".to_string(),
+        KeyCode::Up => "Up".to_string(),
+        KeyCode::Down => "Down".to_string(),
+        KeyCode::Home => "Home".to_string(),
+        KeyCode::End => "End".to_string(),
+        KeyCode::PageUp => "PageUp".to_string(),
+        KeyCode::PageDown => "PageDown".to_string(),
+        KeyCode::Tab => "Tab".to_string(),
+        KeyCode::BackTab => "BackTab".to_string(),
+        KeyCode::Delete => "Delete".to_string(),
+        KeyCode::Insert => "Insert".to_string(),
+        KeyCode::F(value) => format!("F{value}"),
+        KeyCode::Char(ch) => ch.to_string(),
+        KeyCode::Null => "Null".to_string(),
+        KeyCode::Esc => "Esc".to_string(),
+        _ => "Key".to_string(),
+    }
+}
+
+fn format_mouse_kind(kind: &MouseEventKind) -> String {
+    match kind {
+        MouseEventKind::Down(button) => format!("Down({})", format_mouse_button(*button)),
+        MouseEventKind::Up(button) => format!("Up({})", format_mouse_button(*button)),
+        MouseEventKind::Drag(button) => format!("Drag({})", format_mouse_button(*button)),
+        MouseEventKind::Moved => "Moved".to_string(),
+        MouseEventKind::ScrollDown => "ScrollDown".to_string(),
+        MouseEventKind::ScrollUp => "ScrollUp".to_string(),
+        MouseEventKind::ScrollLeft => "ScrollLeft".to_string(),
+        MouseEventKind::ScrollRight => "ScrollRight".to_string(),
+    }
+}
+
+fn format_mouse_button(button: MouseButton) -> &'static str {
+    match button {
+        MouseButton::Left => "Left",
+        MouseButton::Right => "Right",
+        MouseButton::Middle => "Middle",
     }
 }
