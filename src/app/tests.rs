@@ -310,6 +310,25 @@ fn resize_event_is_recorded_in_frame_metadata() {
 }
 
 #[test]
+fn inspector_toggles_and_moves() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![frame("a", &["one", "two"])])),
+    )
+    .unwrap();
+
+    app.capture(20, 5).unwrap();
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT))
+        .unwrap();
+    assert!(app.show_inspector);
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT))
+        .unwrap();
+
+    assert_eq!(app.inspect_cursor(), (1, 0));
+}
+
+#[test]
 fn save_snapshot_uses_configured_directory_and_format() {
     let mut cli = test_cli();
     let dir = unique_temp_dir("twatch-shot-test");

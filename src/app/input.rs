@@ -51,6 +51,30 @@ impl App {
             return Ok(false);
         }
 
+        if self.show_inspector && self.focus == FocusPane::Watch {
+            match (key.code, key.modifiers) {
+                (KeyCode::Up, KeyModifiers::SHIFT) => {
+                    self.inspect_y = self.inspect_y.saturating_sub(1);
+                    return Ok(false);
+                }
+                (KeyCode::Down, KeyModifiers::SHIFT) => {
+                    self.inspect_y = self.inspect_y.saturating_add(1);
+                    self.clamp_inspector_to_snapshot();
+                    return Ok(false);
+                }
+                (KeyCode::Left, KeyModifiers::SHIFT) => {
+                    self.inspect_x = self.inspect_x.saturating_sub(1);
+                    return Ok(false);
+                }
+                (KeyCode::Right, KeyModifiers::SHIFT) => {
+                    self.inspect_x = self.inspect_x.saturating_add(1);
+                    self.clamp_inspector_to_snapshot();
+                    return Ok(false);
+                }
+                _ => {}
+            }
+        }
+
         match (key.code, key.modifiers) {
             (KeyCode::Char('q'), _) => self.show_exit_confirm = true,
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
@@ -61,6 +85,10 @@ impl App {
                 }
             }
             (KeyCode::Char('h'), _) => self.show_help = true,
+            (KeyCode::Char('I'), _) => {
+                self.show_inspector = !self.show_inspector;
+                self.clamp_inspector_to_snapshot();
+            }
             (KeyCode::Char('i'), _) => {
                 if self.focus == FocusPane::Watch {
                     self.app_input_mode = true;
@@ -466,5 +494,15 @@ impl App {
         while self.resize_trace.len() > 64 {
             self.resize_trace.pop_front();
         }
+    }
+
+    fn clamp_inspector_to_snapshot(&mut self) {
+        let Some(snapshot) = self.selected_snapshot() else {
+            self.inspect_x = 0;
+            self.inspect_y = 0;
+            return;
+        };
+        self.inspect_x = self.inspect_x.min(snapshot.width().saturating_sub(1));
+        self.inspect_y = self.inspect_y.min(snapshot.height().saturating_sub(1));
     }
 }

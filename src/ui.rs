@@ -285,14 +285,27 @@ fn display_width(text: &str) -> usize {
 }
 
 fn draw_watch(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let watch_chunks = if app.show_inspector {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(6)])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(0)])
+            .split(area)
+    };
+
     let block = Block::default()
         .style(Style::default().bg(PANEL_BG))
         .borders(Borders::NONE);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = block.inner(watch_chunks[0]);
+    frame.render_widget(block, watch_chunks[0]);
 
     if let Some(snapshot) = app.selected_snapshot() {
         let previous = app.previous_snapshot();
+        let (inspect_x, inspect_y) = app.inspect_cursor();
         WatchWidget {
             snapshot: &snapshot,
             previous: previous.as_ref(),
@@ -302,8 +315,24 @@ fn draw_watch(frame: &mut Frame<'_>, app: &App, area: Rect) {
             filter_mode: app.filter_mode(),
             vertical_scroll: app.watch_scroll,
             horizontal_scroll: app.horizontal_scroll,
+            inspect_cell: if app.show_inspector {
+                Some((inspect_x, inspect_y))
+            } else {
+                None
+            },
         }
         .render(inner, frame.buffer_mut());
+
+        if app.show_inspector {
+            draw_inspector(
+                frame,
+                watch_chunks[1],
+                &snapshot,
+                previous.as_ref(),
+                inspect_x,
+                inspect_y,
+            );
+        }
     }
 }
 
@@ -450,6 +479,7 @@ struct WatchWidget<'a> {
     filter_mode: FilterMode,
     vertical_scroll: usize,
     horizontal_scroll: usize,
+    inspect_cell: Option<(u16, u16)>,
 }
 
 impl Widget for WatchWidget<'_> {
@@ -513,6 +543,12 @@ impl WatchWidget<'_> {
                     .bg(SEARCH_BG)
                     .add_modifier(Modifier::BOLD);
             }
+            if self.inspect_cell == Some((src_col as u16, row)) {
+                style = style
+                    .bg(Color::Indexed(208))
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD);
+            }
             let symbol = if cell.symbol.is_empty() {
                 " "
             } else {
@@ -556,6 +592,78 @@ impl WatchWidget<'_> {
             }
         }
     }
+}
+
+fn draw_inspector(
+    frame: &mut Frame<'_>,
+    area: Rect,
+    snapshot: &ScreenSnapshot,
+    previous: Option<&ScreenSnapshot>,
+    inspect_x: u16,
+    inspect_y: u16,
+) {
+    let cell = snapshot
+        .cell(inspect_x, inspect_y)
+        .cloned()
+        .unwrap_or_else(Cell::blank);
+    let previous_cell = previous
+        .and_then(|snapshot| snapshot.cell(inspect_x, inspect_y))
+        .cloned();
+    let same_as_previous = previous_cell.as_ref().is_some_and(|before| before == &cell);
+    let symbol_label = if cell.symbol == " " {
+        "<space>".to_string()
+    } else if cell.symbol.is_empty() {
+        "<empty>".to_string()
+    } else {
+        cell.symbol.clone()
+    };
+    let previous_symbol = previous_cell
+        .as_ref()
+        .map(|cell| {
+            if cell.symbol == " " {
+                "<space>".to_string()
+            } else if cell.symbol.is_empty() {
+                "<empty>".to_string()
+            } else {
+                cell.symbol.clone()
+            }
+        })
+        .unwrap_or_else(|| "<none>".to_string());
+
+    let lines = vec![
+        Line::from(format!(
+            "x={}, y={} | symbol={} | blank={}",
+            inspect_x,
+            inspect_y,
+            symbol_label,
+            cell.is_blank()
+        )),
+        Line::from(format!(
+            "fg={:?} bg={:?} | bold={} italic={} underline={} inverted={}",
+            cell.style.fg,
+            cell.style.bg,
+            cell.style.bold,
+            cell.style.italic,
+            cell.style.underline,
+            cell.style.inverted
+        )),
+        Line::from(format!(
+            "previous symbol={} | same_as_previous={}",
+            previous_symbol, same_as_previous
+        )),
+        Line::from("Shift+Arrow: move inspector cursor | I: toggle"),
+    ];
+
+    let widget = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Inspector ")
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(BORDER_ACTIVE))
+                .style(Style::default().bg(PANEL_BG)),
+        )
+        .style(Style::default().fg(Color::White).bg(PANEL_BG));
+    frame.render_widget(widget, area);
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {

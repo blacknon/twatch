@@ -16,12 +16,15 @@ impl App {
             show_history: false,
             show_help: false,
             show_exit_confirm: false,
+            show_inspector: false,
             diff_only: false,
             diff_mode: cli.differences.into(),
             focus: FocusPane::Watch,
             app_input_mode: false,
             watch_scroll: 0,
             horizontal_scroll: 0,
+            inspect_x: 0,
+            inspect_y: 0,
             filter_query: String::new(),
             status_message: None,
             selected_index: 0,
@@ -108,6 +111,10 @@ impl App {
                 .map(|metadata| metadata.input_summary.as_str())
         }
         .filter(|summary| !summary.is_empty())
+    }
+
+    pub fn inspect_cursor(&self) -> (u16, u16) {
+        (self.inspect_x, self.inspect_y)
     }
 
     pub fn selected_resize_summary(&self) -> Option<String> {
