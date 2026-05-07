@@ -154,10 +154,8 @@ impl App {
             logfile: cli.logfile.clone(),
             screenshot_dir: PathBuf::from(&cli.screenshot_dir),
             screenshot_format: cli.screenshot_format.into(),
-            command_display: if cli.demo {
+            command_display: if cli.command.is_empty() {
                 "demo".to_string()
-            } else if cli.command.is_empty() {
-                "<interactive>".to_string()
             } else {
                 cli.command.join(" ")
             },
@@ -1359,7 +1357,6 @@ mod tests {
             differences: DiffModeArg::None,
             limit: 500,
             checkpoint_interval: 12,
-            demo: false,
             command: vec!["mock".to_string()],
         }
     }

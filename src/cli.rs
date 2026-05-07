@@ -36,9 +36,6 @@ pub struct Cli {
     #[arg(long, default_value_t = 12)]
     pub checkpoint_interval: usize,
 
-    #[arg(long)]
-    pub demo: bool,
-
     #[arg()]
     pub command: Vec<String>,
 }

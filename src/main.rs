@@ -13,7 +13,7 @@ fn main() -> Result<()> {
     }
 
     let (width, height) = crossterm::terminal::size().unwrap_or((120, 40));
-    let source: Box<dyn FrameSource> = if cli.demo || cli.command.is_empty() {
+    let source: Box<dyn FrameSource> = if cli.command.is_empty() {
         Box::new(DemoRunner::new())
     } else {
         Box::new(PtyRunner::spawn(
@@ -36,7 +36,7 @@ fn main() -> Result<()> {
 
 fn run_batch(cli: Cli) -> Result<()> {
     let (width, height) = crossterm::terminal::size().unwrap_or((120, 40));
-    let mut source: Box<dyn FrameSource> = if cli.demo || cli.command.is_empty() {
+    let mut source: Box<dyn FrameSource> = if cli.command.is_empty() {
         Box::new(DemoRunner::new())
     } else {
         Box::new(PtyRunner::spawn(

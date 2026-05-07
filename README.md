@@ -3,6 +3,8 @@ twatch
 
 twatch - wrap a child TUI app and keep screen history.
 
+<img src="./img/demo.gif" width=720>
+
 ## Description
 
 `twatch` runs a TUI application inside a PTY, records screen changes, and lets
@@ -53,7 +55,6 @@ Options:
   -d, --differences <DIFFERENCES>                  [default: none] [possible values: none, watch]
   -L, --limit <LIMIT>                              [default: 500]
       --checkpoint-interval <CHECKPOINT_INTERVAL>  [default: 12]
-      --demo
   -h, --help                                       Print help
   -V, --version                                    Print version
 ```
