@@ -6,7 +6,7 @@ twatch - wrap a child TUI app and keep screen history.
 ## Description
 
 `twatch` runs a TUI application inside a PTY, records screen changes, and lets
-you move back through history later, similar to `hwatch`.
+you move back through history later, similar to [hwatch](https://github.com/blacknon/hwatch).
 
 ### demo
 
