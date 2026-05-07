@@ -284,6 +284,32 @@ fn forwarded_input_is_recorded_in_frame_metadata() {
 }
 
 #[test]
+fn resize_event_is_recorded_in_frame_metadata() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![
+            frame("a", &["one"]),
+            frame("b", &["two"]),
+            frame("c", &["three"]),
+        ])),
+    )
+    .unwrap();
+
+    app.capture(20, 5).unwrap();
+    app.note_resize_event(30, 8, "terminal");
+    app.capture(30, 8).unwrap();
+    app.capture(30, 8).unwrap();
+
+    let meta = app.history_metadata(1);
+    assert!(meta.resized);
+    assert_eq!(meta.resize_from_width, 20);
+    assert_eq!(meta.resize_from_height, 5);
+    assert_eq!(meta.resize_to_width, 30);
+    assert_eq!(meta.resize_to_height, 8);
+    assert_eq!(meta.resize_source, "terminal");
+}
+
+#[test]
 fn save_snapshot_uses_configured_directory_and_format() {
     let mut cli = test_cli();
     let dir = unique_temp_dir("twatch-shot-test");

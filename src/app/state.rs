@@ -51,6 +51,8 @@ impl App {
             input_trace: std::collections::VecDeque::with_capacity(256),
             pending_input_events: Vec::new(),
             next_input_seq: 1,
+            resize_trace: std::collections::VecDeque::with_capacity(64),
+            pending_resize_event: None,
         };
 
         app.load_history_from_log()?;
@@ -106,6 +108,27 @@ impl App {
                 .map(|metadata| metadata.input_summary.as_str())
         }
         .filter(|summary| !summary.is_empty())
+    }
+
+    pub fn selected_resize_summary(&self) -> Option<String> {
+        let metadata = if self.follow_latest {
+            self.current_metadata.as_ref()
+        } else {
+            self.metadata.get(self.selected_index)
+        }?;
+
+        if !metadata.resized {
+            return None;
+        }
+
+        Some(format!(
+            "resize: {}x{} -> {}x{} ({})",
+            metadata.resize_from_width,
+            metadata.resize_from_height,
+            metadata.resize_to_width,
+            metadata.resize_to_height,
+            metadata.resize_source
+        ))
     }
 
     pub fn selected_filtered_position(&self) -> Option<usize> {

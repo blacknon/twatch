@@ -81,6 +81,11 @@ pub struct AppHistoryMetadata {
     pub input_event_count_since_prev: usize,
     pub resized: bool,
     pub input_summary: String,
+    pub resize_from_width: u16,
+    pub resize_from_height: u16,
+    pub resize_to_width: u16,
+    pub resize_to_height: u16,
+    pub resize_source: String,
 }
 
 impl AppHistoryMetadata {
@@ -96,6 +101,11 @@ impl AppHistoryMetadata {
             input_event_count_since_prev: value.input_event_count_since_prev,
             resized: value.resized,
             input_summary: String::new(),
+            resize_from_width: value.resize_from_width,
+            resize_from_height: value.resize_from_height,
+            resize_to_width: value.resize_to_width,
+            resize_to_height: value.resize_to_height,
+            resize_source: value.resize_source,
         }
     }
 
@@ -110,6 +120,11 @@ impl AppHistoryMetadata {
             changed_cell_count: self.changed_cell_count,
             input_event_count_since_prev: self.input_event_count_since_prev,
             resized: self.resized,
+            resize_from_width: self.resize_from_width,
+            resize_from_height: self.resize_from_height,
+            resize_to_width: self.resize_to_width,
+            resize_to_height: self.resize_to_height,
+            resize_source: self.resize_source.clone(),
         }
     }
 }
@@ -139,6 +154,17 @@ enum InputTraceKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InputTargetFocus {
     Child,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+struct ResizeTraceEvent {
+    timestamp_unix_ms: u64,
+    old_width: u16,
+    old_height: u16,
+    new_width: u16,
+    new_height: u16,
+    source: &'static str,
 }
 
 impl InputTraceEvent {
@@ -192,6 +218,8 @@ pub struct App {
     input_trace: VecDeque<InputTraceEvent>,
     pending_input_events: Vec<InputTraceEvent>,
     next_input_seq: u64,
+    resize_trace: VecDeque<ResizeTraceEvent>,
+    pending_resize_event: Option<ResizeTraceEvent>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

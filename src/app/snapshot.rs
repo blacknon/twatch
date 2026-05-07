@@ -76,12 +76,18 @@ impl App {
                 input_event_count_since_prev: 0,
                 resized: false,
                 input_summary: String::new(),
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: String::new(),
             },
         );
 
         self.archive_current_snapshot()?;
         self.set_current_snapshot(snapshot, metadata);
         self.pending_input_events.clear();
+        self.pending_resize_event = None;
 
         if !self.follow_latest && self.history.is_empty() {
             self.follow_latest = true;
@@ -146,11 +152,20 @@ impl App {
         if metadata.input_summary.is_empty() {
             metadata.input_summary = self.summarize_pending_input_events();
         }
-        metadata.resized = metadata.resized
-            || previous.is_some_and(|previous_snapshot| {
-                previous_snapshot.width() != snapshot.width()
-                    || previous_snapshot.height() != snapshot.height()
-            });
+        if let Some(resize) = &self.pending_resize_event {
+            metadata.resized = true;
+            metadata.resize_from_width = resize.old_width;
+            metadata.resize_from_height = resize.old_height;
+            metadata.resize_to_width = resize.new_width;
+            metadata.resize_to_height = resize.new_height;
+            metadata.resize_source = resize.source.to_string();
+        } else {
+            metadata.resized = metadata.resized
+                || previous.is_some_and(|previous_snapshot| {
+                    previous_snapshot.width() != snapshot.width()
+                        || previous_snapshot.height() != snapshot.height()
+                });
+        }
 
         metadata
     }

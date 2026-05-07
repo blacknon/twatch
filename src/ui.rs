@@ -167,12 +167,14 @@ fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect) {
         badge_width(&hist_label) + 1 + badge_width(&input_label) + 1 + badge_width(&diff_label);
 
     let available_left = usize::from(area.width).saturating_sub(right_width.saturating_add(1));
+    let resize_summary = app.selected_resize_summary();
     let left_text = fit_header_left(
         &filter_label,
         input_hint_long,
         input_hint_short,
         app.status_message
             .as_deref()
+            .or(resize_summary.as_deref())
             .or_else(|| app.selected_input_summary()),
         available_left.saturating_sub(1),
     );

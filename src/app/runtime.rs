@@ -127,6 +127,7 @@ impl App {
     }
 
     fn resize_and_capture(&mut self, width: u16, height: u16) -> Result<()> {
+        self.note_resize_event(width, height.saturating_sub(2), "terminal");
         self.source.resize(width, height.saturating_sub(2))?;
         if !self.paused {
             self.capture(width, height.saturating_sub(2))?;

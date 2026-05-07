@@ -20,6 +20,11 @@ pub struct LogRecord {
     pub changed_cell_count: usize,
     pub input_event_count_since_prev: usize,
     pub resized: bool,
+    pub resize_from_width: u16,
+    pub resize_from_height: u16,
+    pub resize_to_width: u16,
+    pub resize_to_height: u16,
+    pub resize_source: String,
     pub snapshot: ScreenSnapshot,
 }
 
@@ -47,6 +52,11 @@ impl LogRecord {
                 changed_cell_count: self.changed_cell_count,
                 input_event_count_since_prev: self.input_event_count_since_prev,
                 resized: self.resized,
+                resize_from_width: self.resize_from_width,
+                resize_from_height: self.resize_from_height,
+                resize_to_width: self.resize_to_width,
+                resize_to_height: self.resize_to_height,
+                resize_source: self.resize_source,
             },
             self.changed,
         )
@@ -65,6 +75,11 @@ impl Default for LogRecord {
             changed_cell_count: 0,
             input_event_count_since_prev: 0,
             resized: false,
+            resize_from_width: 0,
+            resize_from_height: 0,
+            resize_to_width: 0,
+            resize_to_height: 0,
+            resize_source: String::new(),
             snapshot: ScreenSnapshot::new(0, 0),
         }
     }

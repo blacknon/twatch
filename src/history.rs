@@ -22,6 +22,11 @@ pub struct HistoryMetadata {
     pub changed_cell_count: usize,
     pub input_event_count_since_prev: usize,
     pub resized: bool,
+    pub resize_from_width: u16,
+    pub resize_from_height: u16,
+    pub resize_to_width: u16,
+    pub resize_to_height: u16,
+    pub resize_source: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

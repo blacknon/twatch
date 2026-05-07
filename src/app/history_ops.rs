@@ -210,6 +210,11 @@ impl App {
                 changed_cell_count: metadata.changed_cell_count,
                 input_event_count_since_prev: metadata.input_event_count_since_prev,
                 resized: metadata.resized,
+                resize_from_width: metadata.resize_from_width,
+                resize_from_height: metadata.resize_from_height,
+                resize_to_width: metadata.resize_to_width,
+                resize_to_height: metadata.resize_to_height,
+                resize_source: metadata.resize_source.clone(),
                 snapshot: snapshot.clone(),
             },
         )

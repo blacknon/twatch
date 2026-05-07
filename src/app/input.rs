@@ -5,6 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKi
 
 use super::{
     App, DiffMode, FocusPane, InputMode, InputTargetFocus, InputTraceEvent, InputTraceKind,
+    ResizeTraceEvent,
 };
 
 impl App {
@@ -430,6 +431,40 @@ impl App {
         self.input_trace.push_back(event);
         while self.input_trace.len() > 256 {
             self.input_trace.pop_front();
+        }
+    }
+
+    pub(super) fn note_resize_event(
+        &mut self,
+        new_width: u16,
+        new_height: u16,
+        source: &'static str,
+    ) {
+        let (old_width, old_height) = self
+            .current_snapshot
+            .as_ref()
+            .map(|snapshot| (snapshot.width(), snapshot.height()))
+            .unwrap_or((new_width, new_height));
+
+        if old_width == new_width && old_height == new_height {
+            return;
+        }
+
+        let event = ResizeTraceEvent {
+            timestamp_unix_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or(Duration::ZERO)
+                .as_millis() as u64,
+            old_width,
+            old_height,
+            new_width,
+            new_height,
+            source,
+        };
+        self.pending_resize_event = Some(event.clone());
+        self.resize_trace.push_back(event);
+        while self.resize_trace.len() > 64 {
+            self.resize_trace.pop_front();
         }
     }
 }
