@@ -20,6 +20,11 @@ enum AppEvent {
     SourceUpdated,
 }
 
+enum LoopControl {
+    Continue(bool),
+    Break,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum FocusPane {
     Watch,
@@ -209,67 +214,18 @@ impl App {
 
             if self.source.is_event_driven() {
                 match rx.recv() {
-                    Ok(AppEvent::Terminal(event)) => match event {
-                        Event::Key(key) => {
-                            let should_quit = match self.handle_key_event(key) {
-                                Ok(value) => value,
-                                Err(err) if self.is_source_closed_error(&err) => break,
-                                Err(err) => return Err(err),
-                            };
-                            if should_quit {
-                                break;
-                            }
+                    Ok(AppEvent::Terminal(event)) => match self.process_terminal_event(event)? {
+                        LoopControl::Continue(redraw) => {
                             if !self.paused && self.source.has_pending_update() {
-                                let size = terminal.size()?;
-                                if let Err(err) =
-                                    self.capture(size.width, size.height.saturating_sub(2))
-                                {
-                                    if self.is_source_closed_error(&err) {
-                                        break;
-                                    }
-                                    return Err(err);
-                                }
+                                self.capture_terminal_size(&terminal)?;
                             }
-                            needs_redraw = true;
-                        }
-                        Event::Mouse(mouse) => {
-                            let redraw = match self.handle_mouse(mouse) {
-                                Ok(value) => value,
-                                Err(err) if self.is_source_closed_error(&err) => break,
-                                Err(err) => return Err(err),
-                            };
                             needs_redraw = redraw || needs_redraw;
                         }
-                        Event::Resize(width, height) => {
-                            if let Err(err) = self.source.resize(width, height.saturating_sub(2)) {
-                                if self.is_source_closed_error(&err) {
-                                    break;
-                                }
-                                return Err(err);
-                            }
-                            if !self.paused {
-                                if let Err(err) = self.capture(width, height.saturating_sub(2)) {
-                                    if self.is_source_closed_error(&err) {
-                                        break;
-                                    }
-                                    return Err(err);
-                                }
-                            }
-                            needs_redraw = true;
-                        }
-                        _ => {}
+                        LoopControl::Break => break,
                     },
                     Ok(AppEvent::SourceUpdated) => {
                         if !self.paused {
-                            let size = terminal.size()?;
-                            if let Err(err) =
-                                self.capture(size.width, size.height.saturating_sub(2))
-                            {
-                                if self.is_source_closed_error(&err) {
-                                    break;
-                                }
-                                return Err(err);
-                            }
+                            self.capture_terminal_size(&terminal)?;
                             needs_redraw = true;
                         }
                     }
@@ -277,57 +233,16 @@ impl App {
                 }
             } else {
                 match rx.recv_timeout(self.tick_timeout()) {
-                    Ok(AppEvent::Terminal(event)) => match event {
-                        Event::Key(key) => {
-                            let should_quit = match self.handle_key_event(key) {
-                                Ok(value) => value,
-                                Err(err) if self.is_source_closed_error(&err) => break,
-                                Err(err) => return Err(err),
-                            };
-                            if should_quit {
-                                break;
-                            }
-                            needs_redraw = true;
-                        }
-                        Event::Mouse(mouse) => {
-                            let redraw = match self.handle_mouse(mouse) {
-                                Ok(value) => value,
-                                Err(err) if self.is_source_closed_error(&err) => break,
-                                Err(err) => return Err(err),
-                            };
+                    Ok(AppEvent::Terminal(event)) => match self.process_terminal_event(event)? {
+                        LoopControl::Continue(redraw) => {
                             needs_redraw = redraw || needs_redraw;
                         }
-                        Event::Resize(width, height) => {
-                            if let Err(err) = self.source.resize(width, height.saturating_sub(2)) {
-                                if self.is_source_closed_error(&err) {
-                                    break;
-                                }
-                                return Err(err);
-                            }
-                            if !self.paused {
-                                if let Err(err) = self.capture(width, height.saturating_sub(2)) {
-                                    if self.is_source_closed_error(&err) {
-                                        break;
-                                    }
-                                    return Err(err);
-                                }
-                            }
-                            needs_redraw = true;
-                        }
-                        _ => {}
+                        LoopControl::Break => break,
                     },
                     Ok(AppEvent::SourceUpdated) => {}
                     Err(RecvTimeoutError::Timeout) => {
                         if !self.paused && self.should_capture_now() {
-                            let size = terminal.size()?;
-                            if let Err(err) =
-                                self.capture(size.width, size.height.saturating_sub(2))
-                            {
-                                if self.is_source_closed_error(&err) {
-                                    break;
-                                }
-                                return Err(err);
-                            }
+                            self.capture_terminal_size(&terminal)?;
                             needs_redraw = true;
                         }
                     }
@@ -337,6 +252,38 @@ impl App {
         }
 
         self.source.terminate().ok();
+        Ok(())
+    }
+
+    fn process_terminal_event(&mut self, event: Event) -> Result<LoopControl> {
+        match event {
+            Event::Key(key) => {
+                let should_quit = self.handle_key_event(key)?;
+                if should_quit {
+                    Ok(LoopControl::Break)
+                } else {
+                    Ok(LoopControl::Continue(true))
+                }
+            }
+            Event::Mouse(mouse) => Ok(LoopControl::Continue(self.handle_mouse(mouse)?)),
+            Event::Resize(width, height) => {
+                self.resize_and_capture(width, height)?;
+                Ok(LoopControl::Continue(true))
+            }
+            _ => Ok(LoopControl::Continue(false)),
+        }
+    }
+
+    fn capture_terminal_size(&mut self, terminal: &DefaultTerminal) -> Result<()> {
+        let size = terminal.size()?;
+        self.capture(size.width, size.height.saturating_sub(2))
+    }
+
+    fn resize_and_capture(&mut self, width: u16, height: u16) -> Result<()> {
+        self.source.resize(width, height.saturating_sub(2))?;
+        if !self.paused {
+            self.capture(width, height.saturating_sub(2))?;
+        }
         Ok(())
     }
 
@@ -446,27 +393,8 @@ impl App {
             changed
         };
 
-        if let (Some(previous_snapshot), Some(previous_label)) =
-            (self.current_snapshot.take(), self.current_label.take())
-        {
-            self.history.push(
-                previous_snapshot,
-                HistoryMetadata {
-                    label: previous_label.clone(),
-                },
-            )?;
-            self.metadata.push(AppHistoryMetadata {
-                label: previous_label,
-                changed: self.current_changed,
-            });
-            if self.metadata.len() > self.limit {
-                self.trim_history()?;
-            }
-        }
-
-        self.current_snapshot = Some(snapshot);
-        self.current_label = Some(label);
-        self.current_changed = current_changed;
+        self.archive_current_snapshot()?;
+        self.set_current_snapshot(snapshot, label, current_changed);
 
         if !self.follow_latest && self.history.is_empty() {
             self.follow_latest = true;
@@ -475,6 +403,35 @@ impl App {
         self.append_log_record()?;
         self.last_tick = Instant::now();
         Ok(())
+    }
+
+    fn archive_current_snapshot(&mut self) -> Result<()> {
+        let (Some(previous_snapshot), Some(previous_label)) =
+            (self.current_snapshot.take(), self.current_label.take())
+        else {
+            return Ok(());
+        };
+
+        self.history.push(
+            previous_snapshot,
+            HistoryMetadata {
+                label: previous_label.clone(),
+            },
+        )?;
+        self.metadata.push(AppHistoryMetadata {
+            label: previous_label,
+            changed: self.current_changed,
+        });
+        if self.metadata.len() > self.limit {
+            self.trim_history()?;
+        }
+        Ok(())
+    }
+
+    fn set_current_snapshot(&mut self, snapshot: ScreenSnapshot, label: String, changed: bool) {
+        self.current_snapshot = Some(snapshot);
+        self.current_label = Some(label);
+        self.current_changed = changed;
     }
 
     fn tick_timeout(&self) -> Duration {
@@ -934,96 +891,28 @@ impl App {
     fn move_up(&mut self) {
         match self.focus {
             FocusPane::Watch => self.watch_scroll = self.watch_scroll.saturating_sub(1),
-            FocusPane::History => {
-                if self.follow_latest {
-                    return;
-                }
-
-                match self.selected_filtered_position() {
-                    Some(0) | None => {
-                        self.follow_latest = true;
-                        if let Some(latest) = self.filtered.first().copied() {
-                            self.selected_index = latest;
-                        }
-                    }
-                    Some(position) => {
-                        let next = position.saturating_sub(1);
-                        self.selected_index = self.filtered[next];
-                        self.sync_follow_latest_with_selection();
-                    }
-                }
-            }
+            FocusPane::History => self.move_history_by(-1),
         }
     }
 
     fn move_down(&mut self) {
         match self.focus {
             FocusPane::Watch => self.watch_scroll += 1,
-            FocusPane::History => {
-                if self.filtered.is_empty() {
-                    return;
-                }
-
-                if self.follow_latest {
-                    self.follow_latest = false;
-                    self.selected_index = self.filtered[0];
-                    return;
-                }
-
-                if let Some(position) = self.selected_filtered_position() {
-                    let next = (position + 1).min(self.filtered.len().saturating_sub(1));
-                    self.selected_index = self.filtered[next];
-                    self.sync_follow_latest_with_selection();
-                }
-            }
+            FocusPane::History => self.move_history_by(1),
         }
     }
 
     fn page_up(&mut self) {
         match self.focus {
             FocusPane::Watch => self.watch_scroll = self.watch_scroll.saturating_sub(10),
-            FocusPane::History => {
-                if self.follow_latest {
-                    return;
-                }
-
-                if let Some(position) = self.selected_filtered_position() {
-                    if position <= 10 {
-                        self.follow_latest = true;
-                        if let Some(latest) = self.filtered.first().copied() {
-                            self.selected_index = latest;
-                        }
-                    } else {
-                        let next = position.saturating_sub(10);
-                        self.selected_index = self.filtered[next];
-                        self.sync_follow_latest_with_selection();
-                    }
-                }
-            }
+            FocusPane::History => self.move_history_by(-10),
         }
     }
 
     fn page_down(&mut self) {
         match self.focus {
             FocusPane::Watch => self.watch_scroll += 10,
-            FocusPane::History => {
-                if self.filtered.is_empty() {
-                    return;
-                }
-
-                if self.follow_latest {
-                    self.follow_latest = false;
-                    self.selected_index =
-                        self.filtered[(10usize).min(self.filtered.len().saturating_sub(1))];
-                    return;
-                }
-
-                if let Some(position) = self.selected_filtered_position() {
-                    let next = (position + 10).min(self.filtered.len().saturating_sub(1));
-                    self.selected_index = self.filtered[next];
-                    self.sync_follow_latest_with_selection();
-                }
-            }
+            FocusPane::History => self.move_history_by(10),
         }
     }
 
@@ -1076,6 +965,41 @@ impl App {
         self.follow_latest = false;
     }
 
+    fn move_history_by(&mut self, offset: isize) {
+        if self.filtered.is_empty() {
+            return;
+        }
+
+        if offset < 0 && self.follow_latest {
+            return;
+        }
+
+        let latest_index = self.filtered[0];
+        if self.follow_latest {
+            let next = usize::min(offset as usize - 1, self.filtered.len().saturating_sub(1));
+            self.follow_latest = false;
+            self.selected_index = self.filtered[next];
+            return;
+        }
+
+        let Some(position) = self.selected_filtered_position() else {
+            self.follow_latest = true;
+            self.selected_index = latest_index;
+            return;
+        };
+
+        let next_position = position as isize + offset;
+        if next_position < 0 {
+            self.follow_latest = true;
+            self.selected_index = latest_index;
+            return;
+        }
+
+        let next = usize::min(next_position as usize, self.filtered.len().saturating_sub(1));
+        self.selected_index = self.filtered[next];
+        self.sync_follow_latest_with_selection();
+    }
+
     fn select_history_row(&mut self, row: usize) {
         if row == 0 {
             self.follow_latest = true;
@@ -1099,24 +1023,8 @@ impl App {
 
         for record in load_records(path)? {
             let (snapshot, metadata, changed) = record.into_parts();
-            if let (Some(previous_snapshot), Some(previous_label)) =
-                (self.current_snapshot.take(), self.current_label.take())
-            {
-                self.history.push(
-                    previous_snapshot,
-                    HistoryMetadata {
-                        label: previous_label.clone(),
-                    },
-                )?;
-                self.metadata.push(AppHistoryMetadata {
-                    label: previous_label,
-                    changed: self.current_changed,
-                });
-            }
-
-            self.current_snapshot = Some(snapshot);
-            self.current_label = Some(metadata.label);
-            self.current_changed = changed;
+            self.archive_current_snapshot()?;
+            self.set_current_snapshot(snapshot, metadata.label, changed);
         }
 
         if self.metadata.len() > self.limit {
