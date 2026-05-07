@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use crate::aftercommand::AfterCommandRuntime;
 use crate::cli::{DiffModeArg, ScreenshotFormatArg};
 use crate::history::HistoryMetadata;
 use crate::history::HistoryStore;
@@ -220,6 +221,7 @@ pub struct App {
     snapshot_on_change_cells: Option<usize>,
     snapshot_once: bool,
     snapshot_trigger_fired: bool,
+    aftercommand_runtime: Option<AfterCommandRuntime>,
     command_display: String,
     source: Box<dyn FrameSource>,
     last_tick: Instant,

@@ -25,7 +25,7 @@ fn main() -> Result<()> {
         Box::new(PtyRunner::spawn(
             &cli.shell,
             cli.command.join(" "),
-            cli.aftercommand.clone(),
+            None,
             width,
             height.saturating_sub(2),
         )?)

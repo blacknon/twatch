@@ -48,6 +48,28 @@ pub struct Cli {
     #[arg(short = 'A', long)]
     pub aftercommand: Option<String>,
 
+    #[arg(long, help = "Only run aftercommand when output matches this regex")]
+    pub aftercommand_regex: Option<String>,
+
+    #[arg(
+        long,
+        help = "Only run aftercommand when changed cell count reaches this threshold"
+    )]
+    pub aftercommand_change_cells: Option<usize>,
+
+    #[arg(long, help = "Only run aftercommand on every Nth changed frame")]
+    pub aftercommand_every: Option<usize>,
+
+    #[arg(long, help = "Debounce aftercommand for this many milliseconds")]
+    pub aftercommand_debounce_ms: Option<u64>,
+
+    #[arg(
+        long,
+        default_value_t = 3000,
+        help = "Kill aftercommand if it exceeds this timeout in milliseconds"
+    )]
+    pub aftercommand_timeout_ms: u64,
+
     #[arg(short = 'C', long)]
     pub compress: bool,
 

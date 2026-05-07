@@ -1,3 +1,4 @@
+pub mod aftercommand;
 pub mod app;
 pub mod batch;
 pub mod cli;

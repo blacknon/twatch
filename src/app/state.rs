@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use crate::aftercommand::{AfterCommandConfig, AfterCommandRuntime};
 use anyhow::{Context, Result};
 use regex::Regex;
 
@@ -11,6 +12,28 @@ use crate::runner::FrameSource;
 
 impl App {
     pub fn new(cli: &Cli, source: Box<dyn FrameSource>) -> Result<Self> {
+        let snapshot_on_regex = cli
+            .snapshot_on_regex
+            .as_ref()
+            .map(|pattern| {
+                Regex::new(pattern).with_context(|| format!("invalid snapshot regex: {pattern}"))
+            })
+            .transpose()?;
+        let aftercommand_regex = cli
+            .aftercommand_regex
+            .as_ref()
+            .map(|pattern| {
+                Regex::new(pattern)
+                    .with_context(|| format!("invalid aftercommand regex: {pattern}"))
+            })
+            .transpose()?;
+        let command_display = if let Some(path) = &cli.replay {
+            format!("replay: {path}")
+        } else if cli.command.is_empty() {
+            "demo".to_string()
+        } else {
+            cli.command.join(" ")
+        };
         let mut app = Self {
             interval_secs: cli.interval,
             paused: false,
@@ -45,24 +68,23 @@ impl App {
             screenshot_dir: PathBuf::from(&cli.screenshot_dir),
             screenshot_format: cli.screenshot_format.into(),
             snapshot_on: cli.snapshot_on.clone(),
-            snapshot_on_regex: cli
-                .snapshot_on_regex
-                .as_ref()
-                .map(|pattern| {
-                    Regex::new(pattern)
-                        .with_context(|| format!("invalid snapshot regex: {pattern}"))
-                })
-                .transpose()?,
+            snapshot_on_regex,
             snapshot_on_change_cells: cli.snapshot_on_change_cells,
             snapshot_once: cli.snapshot_once,
             snapshot_trigger_fired: false,
-            command_display: if let Some(path) = &cli.replay {
-                format!("replay: {path}")
-            } else if cli.command.is_empty() {
-                "demo".to_string()
-            } else {
-                cli.command.join(" ")
-            },
+            aftercommand_runtime: cli.aftercommand.as_ref().map(|hook| {
+                AfterCommandRuntime::new(AfterCommandConfig {
+                    hook: hook.clone(),
+                    shell: cli.shell.clone(),
+                    command_display: command_display.clone(),
+                    regex: aftercommand_regex.clone(),
+                    changed_cells: cli.aftercommand_change_cells,
+                    every: cli.aftercommand_every,
+                    debounce_ms: cli.aftercommand_debounce_ms,
+                    timeout_ms: cli.aftercommand_timeout_ms,
+                })
+            }),
+            command_display,
             source,
             last_tick: Instant::now(),
             last_mouse_input: None,

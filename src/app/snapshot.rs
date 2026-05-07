@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use crate::aftercommand::AfterCommandEvent;
 use anyhow::Result;
 
 use super::{App, FilterMode};
@@ -95,6 +96,7 @@ impl App {
         self.rebuild_filter()?;
         self.append_log_record()?;
         self.maybe_save_triggered_snapshot()?;
+        self.maybe_run_aftercommand(&raw_output)?;
         self.last_tick = Instant::now();
         Ok(())
     }
@@ -286,6 +288,31 @@ impl App {
             display_tmp_path(&path),
             self.screenshot_format.label()
         ));
+        Ok(())
+    }
+
+    fn maybe_run_aftercommand(&mut self, raw_output: &str) -> Result<()> {
+        let Some(runtime) = &mut self.aftercommand_runtime else {
+            return Ok(());
+        };
+        let Some(metadata) = &self.current_metadata else {
+            return Ok(());
+        };
+
+        let result = runtime.evaluate_and_enqueue(AfterCommandEvent {
+            changed: metadata.changed,
+            output: raw_output.to_string(),
+            timestamp_unix_ms: metadata.timestamp_unix_ms,
+            frame_seq: metadata.frame_seq,
+            width: metadata.width,
+            height: metadata.height,
+            changed_cell_count: metadata.changed_cell_count,
+            last_input_summary: metadata.input_summary.clone(),
+        })?;
+
+        if let Some(reason) = result {
+            self.status_message = Some(format!("aftercommand: {reason}"));
+        }
         Ok(())
     }
 
