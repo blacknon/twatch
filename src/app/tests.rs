@@ -329,6 +329,76 @@ fn inspector_toggles_and_moves() {
 }
 
 #[test]
+fn snapshot_trigger_saves_on_string_match() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-trigger-string");
+    cli.screenshot_dir = dir.to_string_lossy().into_owned();
+    cli.snapshot_on = Some("panic".to_string());
+
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("snap", &["panic: boom"])])),
+    )
+    .unwrap();
+
+    app.capture(20, 5).unwrap();
+
+    let path = dir.join("twatch-auto-0001-snap.txt");
+    assert!(path.exists());
+
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn snapshot_trigger_saves_on_changed_cell_threshold() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-trigger-cells");
+    cli.screenshot_dir = dir.to_string_lossy().into_owned();
+    cli.snapshot_on_change_cells = Some(2);
+
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("snap", &["ab"])])),
+    )
+    .unwrap();
+
+    app.capture(20, 5).unwrap();
+
+    let path = dir.join("twatch-auto-0001-snap.txt");
+    assert!(path.exists());
+
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn snapshot_trigger_once_only_saves_first_match() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-trigger-once");
+    cli.screenshot_dir = dir.to_string_lossy().into_owned();
+    cli.snapshot_on = Some("panic".to_string());
+    cli.snapshot_once = true;
+
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![
+            frame("a", &["panic: one"]),
+            frame("b", &["panic: two"]),
+        ])),
+    )
+    .unwrap();
+
+    app.capture(20, 5).unwrap();
+    app.capture(20, 5).unwrap();
+
+    assert!(dir.join("twatch-auto-0001-a.txt").exists());
+    assert!(!dir.join("twatch-auto-0002-b.txt").exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn save_snapshot_uses_configured_directory_and_format() {
     let mut cli = test_cli();
     let dir = unique_temp_dir("twatch-shot-test");
@@ -388,6 +458,10 @@ fn test_cli() -> Cli {
         logfile: None,
         screenshot_dir: "/tmp".to_string(),
         screenshot_format: ScreenshotFormatArg::Text,
+        snapshot_on: None,
+        snapshot_on_regex: None,
+        snapshot_on_change_cells: None,
+        snapshot_once: false,
         shell: "sh -c".to_string(),
         differences: DiffModeArg::None,
         limit: 500,

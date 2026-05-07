@@ -9,6 +9,7 @@ use crate::runner::FrameSource;
 use crate::screen::ScreenSnapshot;
 use crate::screenshot::ScreenshotFormat;
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
+use regex::Regex;
 
 mod history_ops;
 mod input;
@@ -213,6 +214,11 @@ pub struct App {
     logfile: Option<String>,
     screenshot_dir: PathBuf,
     screenshot_format: ScreenshotFormat,
+    snapshot_on: Option<String>,
+    snapshot_on_regex: Option<Regex>,
+    snapshot_on_change_cells: Option<usize>,
+    snapshot_once: bool,
+    snapshot_trigger_fired: bool,
     command_display: String,
     source: Box<dyn FrameSource>,
     last_tick: Instant,

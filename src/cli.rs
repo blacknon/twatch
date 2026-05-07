@@ -60,6 +60,24 @@ pub struct Cli {
     #[arg(long, value_enum, default_value_t = ScreenshotFormatArg::Text)]
     pub screenshot_format: ScreenshotFormatArg,
 
+    #[arg(
+        long,
+        help = "Auto-save a snapshot when the screen contains this string"
+    )]
+    pub snapshot_on: Option<String>,
+
+    #[arg(long, help = "Auto-save a snapshot when the screen matches this regex")]
+    pub snapshot_on_regex: Option<String>,
+
+    #[arg(
+        long,
+        help = "Auto-save a snapshot when changed cell count reaches this threshold"
+    )]
+    pub snapshot_on_change_cells: Option<usize>,
+
+    #[arg(long, help = "Only trigger automatic snapshot once")]
+    pub snapshot_once: bool,
+
     #[arg(short = 's', long, default_value_t = default_shell())]
     pub shell: String,
 

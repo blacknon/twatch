@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use regex::Regex;
 
 use super::{App, AppHistoryMetadata, FilterMode, FocusPane, InputMode};
 use crate::cli::Cli;
@@ -42,6 +43,18 @@ impl App {
             logfile: cli.logfile.clone(),
             screenshot_dir: PathBuf::from(&cli.screenshot_dir),
             screenshot_format: cli.screenshot_format.into(),
+            snapshot_on: cli.snapshot_on.clone(),
+            snapshot_on_regex: cli
+                .snapshot_on_regex
+                .as_ref()
+                .map(|pattern| {
+                    Regex::new(pattern)
+                        .with_context(|| format!("invalid snapshot regex: {pattern}"))
+                })
+                .transpose()?,
+            snapshot_on_change_cells: cli.snapshot_on_change_cells,
+            snapshot_once: cli.snapshot_once,
+            snapshot_trigger_fired: false,
             command_display: if cli.command.is_empty() {
                 "demo".to_string()
             } else {
