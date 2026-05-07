@@ -3,12 +3,20 @@ twatch
 
 twatch - wrap a child TUI app and keep screen history.
 
-<img src="./img/demo.gif" width=720>
-
 ## Description
 
 `twatch` runs a TUI application inside a PTY, records screen changes, and lets
 you move back through history later, similar to `hwatch`.
+
+### demo
+
+#### TUI wrap mode
+
+<img src="./img/demo_tui.gif" width=720>
+
+#### TUI to Batch mode
+
+<img src="./img/demo_cli.gif" width=720>
 
 ### Features
 
@@ -92,21 +100,95 @@ Options:
 | `s` | Cycle snapshot format (`text(ANSI)` / `svg`) |
 | `S` | Save selected snapshot |
 
-## Configuration
+## Example
 
-### Logging output
+
+### Wrap `htop`
+
+Run a TUI application inside `twatch` and browse previous screen states later.
+This is the basic interactive mode.
 
 ```bash
-twatch --logfile ./twatch.jsonl htop
+twatch htop
+```
+
+#### filter
+
+Open plain search mode and narrow the history list to snapshots containing a
+matching string.
+Matches are highlighted on the watch screen while the filtered history entries
+remain selectable in the history pane.
+
+```bash
+twatch htop
+# press /
+```
+
+Open regex search mode and narrow the history list to matching snapshots.
+Matching entries stay selectable from the history pane while you inspect changes.
+
+```bash
+twatch htop
+# press *
 ```
 
 ### Batch mode
+
+Stream the captured TUI as plain terminal text instead of opening the interactive UI.
+You can combine this with count, crop, size, diff, and color controls.
 
 ```bash
 twatch -b htop
 ```
 
+#### Delete ANSI Color
+
+Disable ANSI escape sequences and print plain text only.
+This is useful when piping batch output into tools that do not handle colors well.
+
+```bash
+twatch -b --batch-no-color htop
+```
+
+#### Set terminal size, and cropped range　
+
+Use a fixed PTY size when you want stable batch output across runs.
+You can also crop a rectangular region to focus on one part of the captured screen.
+
+```bash
+twatch --batch-size 80,20 btop
+```
+
+```bash
+twatch --batch-size 80,20 --batch-crop 0,10,80,10 -b htop
+```
+
+#### Line/Word diff
+
+For text-oriented commands, you can switch to `line` or `word` diff mode to get [hwatch](https://github.com/blacknon/hwatch)-like highlighting.
+This works best in batch mode, where twatch compares plain text snapshots instead of the live TUI screen buffer.
+
+```bash
+twatch --batch --diff-mode line htop
+```
+
+```bash
+twatch --batch --diff-mode word kubectl get pods -A
+```
+
+### Logging output
+
+Save captured snapshots as JSONL so you can reload or inspect a session later.
+This is useful for debugging long-running screens outside the live UI.
+
+```bash
+twatch --logfile ./twatch.jsonl htop
+```
+
 ### Compression
+
+Compress stored history entries in memory to reduce runtime footprint.
+This is most helpful when the wrapped TUI updates frequently.
 
 ```bash
 twatch -C htop
@@ -114,23 +196,11 @@ twatch -C htop
 
 ### Snapshot output
 
+Save the selected screen as ANSI text or SVG from the interactive view.
+Use this when you want a shareable artifact of one captured frame.
+
 ```bash
 twatch --screenshot-dir ./shots --screenshot-format svg htop
-```
-
-## Example
-
-### Wrap `htop`
-
-```bash
-twatch htop
-```
-
-### Regex filter
-
-```bash
-twatch htop
-# press *
 ```
 
 ## Related Projects

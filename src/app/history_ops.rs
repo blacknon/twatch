@@ -33,12 +33,34 @@ impl App {
             return Ok(());
         }
 
-        if self.filtered.is_empty() {
-            self.follow_latest = true;
+        if self.follow_latest && !self.current_snapshot_matches_filter() {
+            if let Some(first) = self.filtered.first().copied() {
+                self.selected_index = first;
+                self.follow_latest = false;
+            }
         } else if !self.follow_latest && !self.filtered.contains(&self.selected_index) {
             self.selected_index = *self.filtered.first().unwrap_or(&0);
         }
         Ok(())
+    }
+
+    fn current_snapshot_matches_filter(&self) -> bool {
+        let Some(snapshot) = &self.current_snapshot else {
+            return false;
+        };
+
+        match self.filter_mode {
+            FilterMode::Plain => {
+                let needle = self.filter_query.to_lowercase();
+                snapshot
+                    .lines()
+                    .iter()
+                    .any(|line| line.to_lowercase().contains(&needle))
+            }
+            FilterMode::Regex => Regex::new(&self.filter_query)
+                .ok()
+                .is_some_and(|regex| snapshot.lines().iter().any(|line| regex.is_match(line))),
+        }
     }
 
     pub(super) fn delete_selected_history(&mut self) -> Result<()> {

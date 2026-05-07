@@ -1,4 +1,4 @@
-Output img/demo.gif
+Output img/demo_tui.gif
 
 Set Shell "zsh"
 Set FontSize 20

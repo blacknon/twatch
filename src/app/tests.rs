@@ -4,6 +4,7 @@ use crate::runner::{CaptureFrame, FrameSource};
 use crate::screen::ScreenSnapshot;
 use anyhow::Result;
 use crossterm::event::{KeyEvent, MouseEvent};
+use crossterm::event::{KeyCode, KeyModifiers};
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -61,7 +62,7 @@ impl FrameSource for MockSource {
 }
 
 #[test]
-fn regex_filter_keeps_latest_follow() {
+fn regex_filter_stops_following_latest_when_new_frame_does_not_match() {
     let mut app = App::new(
         &test_cli(),
         Box::new(MockSource::new(vec![
@@ -77,8 +78,90 @@ fn regex_filter_keeps_latest_follow() {
     app.filter_query = "worker-01".to_string();
     app.rebuild_filter().unwrap();
 
-    assert!(app.follow_latest);
+    assert!(!app.follow_latest);
     assert_eq!(app.filtered, vec![0]);
+    assert_eq!(app.selected_index, 0);
+}
+
+#[test]
+fn plain_filter_stops_following_latest_when_new_frame_does_not_match() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![
+            frame("a", &["worker-01 ok"]),
+            frame("b", &["worker-02 fail"]),
+        ])),
+    )
+    .unwrap();
+
+    app.capture(20, 5).unwrap();
+    app.filter_mode = FilterMode::Plain;
+    app.filter_query = "worker-01".to_string();
+    app.rebuild_filter().unwrap();
+
+    assert!(app.follow_latest);
+
+    app.capture(20, 5).unwrap();
+
+    assert!(!app.follow_latest);
+    assert_eq!(app.filtered, vec![0]);
+    assert_eq!(app.selected_index, 0);
+}
+
+#[test]
+fn escape_does_not_clear_committed_filter_in_normal_mode() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![frame("a", &["worker-01 ok"])])),
+    )
+    .unwrap();
+
+    app.capture(20, 5).unwrap();
+    app.filter_mode = FilterMode::Plain;
+    app.filter_query = "worker-01".to_string();
+    app.rebuild_filter().unwrap();
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+
+    assert_eq!(app.filter_query, "worker-01");
+    assert!(app.filtered.is_empty());
+    assert!(app.follow_latest);
+}
+
+#[test]
+fn ctrl_c_clears_committed_filter_in_normal_mode() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![frame("a", &["worker-01 ok"])])),
+    )
+    .unwrap();
+
+    app.capture(20, 5).unwrap();
+    app.filter_mode = FilterMode::Plain;
+    app.filter_query = "worker-01".to_string();
+    app.rebuild_filter().unwrap();
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+        .unwrap();
+
+    assert!(app.filter_query.is_empty());
+    assert!(app.follow_latest);
+    assert!(!app.show_exit_confirm);
+}
+
+#[test]
+fn ctrl_c_opens_exit_when_filter_is_empty() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![frame("a", &["worker-01 ok"])])),
+    )
+    .unwrap();
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+        .unwrap();
+
+    assert!(app.show_exit_confirm);
 }
 
 #[test]

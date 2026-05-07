@@ -1,22 +1,9 @@
-use crate::cli::{Cli, CropSpec, DiffModeArg};
+use crate::cli::{Cli, DiffModeArg};
 use crate::screen::ScreenSnapshot;
 use crate::screenshot::render_ansi_text;
 use similar::{ChangeTag, DiffTag, TextDiff};
 
-pub fn terminal_size(cli: &Cli) -> (u16, u16) {
-    cli.batch_size
-        .map(|size| (size.width, size.height))
-        .unwrap_or_else(|| crossterm::terminal::size().unwrap_or((120, 40)))
-}
-
-pub fn prepare_snapshot(snapshot: &ScreenSnapshot, crop: Option<CropSpec>) -> ScreenSnapshot {
-    crop.map_or_else(
-        || snapshot.clone(),
-        |crop| snapshot.cropped(crop.x, crop.y, crop.width, crop.height),
-    )
-}
-
-pub fn render_output(
+pub(super) fn render_output(
     cli: &Cli,
     label: &str,
     current: &ScreenSnapshot,
@@ -103,46 +90,14 @@ fn render_list_diff(
                 }
             }
             DiffTag::Delete => {
-                for line in old_lines {
-                    push_prefixed_line(
-                        &mut out,
-                        "-  ",
-                        line.trim_end_matches('\n'),
-                        color,
-                        Some(LineColor::Removed),
-                    );
-                }
+                render_plain_lines(&mut out, old_lines, "-  ", color, LineColor::Removed);
             }
             DiffTag::Insert => {
-                for line in new_lines {
-                    push_prefixed_line(
-                        &mut out,
-                        "+  ",
-                        line.trim_end_matches('\n'),
-                        color,
-                        Some(LineColor::Added),
-                    );
-                }
+                render_plain_lines(&mut out, new_lines, "+  ", color, LineColor::Added);
             }
             DiffTag::Replace => {
-                for line in old_lines {
-                    push_prefixed_line(
-                        &mut out,
-                        "-  ",
-                        line.trim_end_matches('\n'),
-                        color,
-                        Some(LineColor::Removed),
-                    );
-                }
-                for line in new_lines {
-                    push_prefixed_line(
-                        &mut out,
-                        "+  ",
-                        line.trim_end_matches('\n'),
-                        color,
-                        Some(LineColor::Added),
-                    );
-                }
+                render_plain_lines(&mut out, old_lines, "-  ", color, LineColor::Removed);
+                render_plain_lines(&mut out, new_lines, "+  ", color, LineColor::Added);
             }
         }
     }
@@ -195,24 +150,8 @@ fn render_word_diff(
                 }
             }
             _ => {
-                for line in old_lines {
-                    push_prefixed_line(
-                        &mut out,
-                        "-  ",
-                        line.trim_end_matches('\n'),
-                        color,
-                        Some(LineColor::Removed),
-                    );
-                }
-                for line in new_lines {
-                    push_prefixed_line(
-                        &mut out,
-                        "+  ",
-                        line.trim_end_matches('\n'),
-                        color,
-                        Some(LineColor::Added),
-                    );
-                }
+                render_plain_lines(&mut out, old_lines, "-  ", color, LineColor::Removed);
+                render_plain_lines(&mut out, new_lines, "+  ", color, LineColor::Added);
             }
         }
     }
@@ -227,6 +166,24 @@ fn render_header_lines(header: &[String; 2]) -> String {
         out.push('\n');
     }
     out
+}
+
+fn render_plain_lines(
+    out: &mut String,
+    lines: &[&str],
+    prefix: &str,
+    color: bool,
+    line_color: LineColor,
+) {
+    for line in lines {
+        push_prefixed_line(
+            out,
+            prefix,
+            line.trim_end_matches('\n'),
+            color,
+            Some(line_color),
+        );
+    }
 }
 
 fn push_prefixed_line(
@@ -302,92 +259,6 @@ impl LineColor {
         match self {
             Self::Removed => "\x1b[31m",
             Self::Added => "\x1b[32m",
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{prepare_snapshot, render_output};
-    use crate::cli::{Cli, CropSpec, DiffModeArg, ScreenshotFormatArg};
-    use crate::screen::ScreenSnapshot;
-
-    #[test]
-    fn crops_from_top_left() {
-        let snapshot = ScreenSnapshot::from_text_lines(6, 3, &["abcdef", "ghijkl", "mnopqr"]);
-        let cropped = prepare_snapshot(
-            &snapshot,
-            Some(CropSpec {
-                x: 1,
-                y: 1,
-                width: 3,
-                height: 2,
-            }),
-        );
-        assert_eq!(cropped.lines(), vec!["hij".to_string(), "nop".to_string()]);
-    }
-
-    #[test]
-    fn renders_list_diff_only() {
-        let mut cli = test_cli();
-        cli.differences = DiffModeArg::List;
-        cli.batch_diff_only = true;
-        cli.batch_no_color = true;
-        let before = ScreenSnapshot::from_text_lines(8, 1, &["alpha"]);
-        let after = ScreenSnapshot::from_text_lines(8, 1, &["bravo"]);
-        let rendered = render_output(&cli, "tick", &after, Some(&before));
-        assert!(rendered.contains("+  bravo"));
-        assert!(rendered.contains("-  alpha"));
-        assert!(!rendered.contains("   alpha"));
-    }
-
-    #[test]
-    fn renders_list_diff_like_hwatch_prefixes() {
-        let mut cli = test_cli();
-        cli.differences = DiffModeArg::List;
-        cli.batch_no_color = true;
-        let before = ScreenSnapshot::from_text_lines(8, 2, &["same", "alpha"]);
-        let after = ScreenSnapshot::from_text_lines(8, 2, &["same", "bravo"]);
-        let rendered = render_output(&cli, "tick", &after, Some(&before));
-        assert!(rendered.contains("   same"));
-        assert!(rendered.contains("-  alpha"));
-        assert!(rendered.contains("+  bravo"));
-    }
-
-    #[test]
-    fn renders_word_diff_with_same_prefix_shape() {
-        let mut cli = test_cli();
-        cli.differences = DiffModeArg::Word;
-        cli.batch_no_color = true;
-        let before = ScreenSnapshot::from_text_lines(16, 1, &["alpha beta"]);
-        let after = ScreenSnapshot::from_text_lines(16, 1, &["alpha gamma"]);
-        let rendered = render_output(&cli, "tick", &after, Some(&before));
-        assert!(rendered.contains("-  "));
-        assert!(rendered.contains("+  "));
-        assert!(rendered.contains("alpha"));
-        assert!(rendered.contains("beta"));
-        assert!(rendered.contains("gamma"));
-    }
-
-    fn test_cli() -> Cli {
-        Cli {
-            interval: 2.0,
-            batch: true,
-            batch_count: None,
-            batch_size: None,
-            batch_crop: None,
-            batch_diff_only: false,
-            batch_no_color: false,
-            aftercommand: None,
-            compress: false,
-            logfile: None,
-            screenshot_dir: "/tmp".to_string(),
-            screenshot_format: ScreenshotFormatArg::Text,
-            shell: "sh -c".to_string(),
-            differences: DiffModeArg::None,
-            limit: 500,
-            checkpoint_interval: 12,
-            command: vec!["mock".to_string()],
         }
     }
 }
