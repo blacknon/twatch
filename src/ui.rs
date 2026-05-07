@@ -414,7 +414,7 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect) {
 fn draw_exit_confirm(frame: &mut Frame<'_>, area: Rect) {
     frame.render_widget(Clear, area);
     let lines = vec![
-        Line::from("Exit hwatch?"),
+        Line::from("Exit twatch?"),
         Line::from(""),
         Line::from("Press 'Y' or 'Q' : Quit."),
         Line::from("Press 'N' or 'Esc': Stay."),

@@ -33,8 +33,14 @@ pub trait FrameSource {
     fn send_mouse(&mut self, event: MouseEvent, body_row_offset: u16) -> Result<()>;
     fn has_pending_update(&self) -> bool;
     fn is_event_driven(&self) -> bool;
-    fn take_update_receiver(&mut self) -> Option<Receiver<()>>;
+    fn take_update_receiver(&mut self) -> Option<Receiver<SourceEvent>>;
     fn terminate(&mut self) -> Result<()>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SourceEvent {
+    Updated,
+    Closed,
 }
 
 pub struct PtyRunner {
@@ -49,7 +55,7 @@ pub struct PtyRunner {
     aftercommand: Option<String>,
     last_snapshot: Option<ScreenSnapshot>,
     last_size: (u16, u16),
-    update_rx: Option<Receiver<()>>,
+    update_rx: Option<Receiver<SourceEvent>>,
 }
 
 pub struct DemoRunner {
@@ -93,7 +99,7 @@ impl PtyRunner {
             parser: vt100::Parser::new(height.max(1), width.max(1), SCROLLBACK_LINES),
         }));
         let dirty = Arc::new(AtomicBool::new(true));
-        let (update_tx, update_rx) = mpsc::sync_channel(1);
+        let (update_tx, update_rx) = mpsc::sync_channel(2);
         start_reader_thread(state.clone(), dirty.clone(), reader, update_tx);
 
         let (shell_program, shell_args) = parse_shell(shell);
@@ -195,13 +201,13 @@ impl FrameSource for PtyRunner {
         let dirty = self.dirty.swap(false, Ordering::Relaxed);
         let snapshot = if dirty || self.last_snapshot.is_none() {
             let snapshot = self.snapshot();
-            self.last_snapshot = Some(snapshot.clone());
             snapshot
         } else {
             self.last_snapshot.clone().expect("snapshot must exist")
         };
         let raw_output = snapshot.lines().join("\n");
-        let changed = dirty;
+        let changed = self.last_snapshot.as_ref() != Some(&snapshot);
+        self.last_snapshot = Some(snapshot.clone());
         self.maybe_run_aftercommand(&raw_output, changed)?;
 
         Ok(CaptureFrame {
@@ -265,9 +271,11 @@ impl FrameSource for PtyRunner {
     }
 
     fn terminate(&mut self) -> Result<()> {
-        self.child
-            .kill()
-            .context("failed to terminate child PTY process")
+        match self.child.kill() {
+            Ok(()) => Ok(()),
+            Err(err) if is_child_exit_error(&err) => Ok(()),
+            Err(err) => Err(err).context("failed to terminate child PTY process"),
+        }
     }
 
     fn has_pending_update(&self) -> bool {
@@ -278,7 +286,7 @@ impl FrameSource for PtyRunner {
         true
     }
 
-    fn take_update_receiver(&mut self) -> Option<Receiver<()>> {
+    fn take_update_receiver(&mut self) -> Option<Receiver<SourceEvent>> {
         self.update_rx.take()
     }
 }
@@ -347,7 +355,7 @@ impl FrameSource for DemoRunner {
         false
     }
 
-    fn take_update_receiver(&mut self) -> Option<Receiver<()>> {
+    fn take_update_receiver(&mut self) -> Option<Receiver<SourceEvent>> {
         None
     }
 
@@ -368,7 +376,7 @@ fn start_reader_thread(
     state: Arc<RwLock<TerminalState>>,
     dirty: Arc<AtomicBool>,
     mut reader: Box<dyn Read + Send>,
-    update_tx: SyncSender<()>,
+    update_tx: SyncSender<SourceEvent>,
 ) {
     thread::spawn(move || {
         let mut buffer = [0u8; 8192];
@@ -379,15 +387,28 @@ fn start_reader_thread(
                     let mut state = state.write().expect("terminal state poisoned");
                     state.parser.process(&buffer[..count]);
                     dirty.store(true, Ordering::Relaxed);
-                    match update_tx.try_send(()) {
-                        Ok(()) | Err(TrySendError::Full(())) => {}
-                        Err(TrySendError::Disconnected(())) => break,
+                    match update_tx.try_send(SourceEvent::Updated) {
+                        Ok(()) | Err(TrySendError::Full(_)) => {}
+                        Err(TrySendError::Disconnected(_)) => break,
                     }
                 }
                 Err(_) => break,
             }
         }
+        let _ = update_tx.send(SourceEvent::Closed);
     });
+}
+
+fn is_child_exit_error(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::NotFound
+            | std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::UnexpectedEof
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::NotConnected
+    ) || matches!(err.raw_os_error(), Some(3) | Some(5))
 }
 
 fn build_command(shell: &str, command: &str) -> Result<CommandBuilder> {

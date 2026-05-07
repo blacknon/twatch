@@ -1,7 +1,7 @@
 twatch
 ======
 
-twatch - wrap a child TUI app and keep screen history.
+twatch - record, rewind, and diff terminal UI screens.
 
 ## Description
 
@@ -169,11 +169,11 @@ For text-oriented commands, you can switch to `line` or `word` diff mode to get 
 This works best in batch mode, where twatch compares plain text snapshots instead of the live TUI screen buffer.
 
 ```bash
-twatch --batch --diff-mode line htop
+twatch --batch --differences line htop
 ```
 
 ```bash
-twatch --batch --diff-mode word kubectl get pods -A
+twatch --batch --differences word kubectl get pods -A
 ```
 
 ### Logging output

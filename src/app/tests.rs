@@ -1,6 +1,6 @@
 use super::{App, FilterMode, FocusPane};
 use crate::cli::{Cli, DiffModeArg, ScreenshotFormatArg};
-use crate::runner::{CaptureFrame, FrameSource};
+use crate::runner::{CaptureFrame, FrameSource, SourceEvent};
 use crate::screen::ScreenSnapshot;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -52,7 +52,7 @@ impl FrameSource for MockSource {
         false
     }
 
-    fn take_update_receiver(&mut self) -> Option<std::sync::mpsc::Receiver<()>> {
+    fn take_update_receiver(&mut self) -> Option<std::sync::mpsc::Receiver<SourceEvent>> {
         None
     }
 
@@ -220,6 +220,24 @@ fn clear_history_except_selected_keeps_only_target() {
 }
 
 #[test]
+fn unchanged_frame_does_not_create_new_history_entry() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![
+            frame("a", &["same"]),
+            unchanged_frame("b", &["same"]),
+        ])),
+    )
+    .unwrap();
+
+    app.capture(20, 5).unwrap();
+    app.capture(20, 5).unwrap();
+
+    assert_eq!(app.history_len(), 0);
+    assert_eq!(app.current_label(), Some("a"));
+}
+
+#[test]
 fn save_snapshot_uses_configured_directory_and_format() {
     let mut cli = test_cli();
     let dir = unique_temp_dir("twatch-shot-test");
@@ -293,6 +311,15 @@ fn frame(label: &str, lines: &[&str]) -> CaptureFrame {
         snapshot: ScreenSnapshot::from_text_lines(20, 5, lines),
         raw_output: lines.join("\n"),
         changed: true,
+    }
+}
+
+fn unchanged_frame(label: &str, lines: &[&str]) -> CaptureFrame {
+    CaptureFrame {
+        label: label.to_string(),
+        snapshot: ScreenSnapshot::from_text_lines(20, 5, lines),
+        raw_output: lines.join("\n"),
+        changed: false,
     }
 }
 
