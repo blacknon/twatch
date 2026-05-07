@@ -1,0 +1,165 @@
+name: Release Job
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag name, for example v0.1.0"
+        required: false
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build-assets:
+    name: Build Release Asset (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive_ext: tar.gz
+            binary_name: twatch
+            use_cross: false
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            archive_ext: tar.gz
+            binary_name: twatch
+            use_cross: true
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            archive_ext: tar.gz
+            binary_name: twatch
+            use_cross: true
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            archive_ext: tar.gz
+            binary_name: twatch
+            use_cross: false
+          - os: macos-14
+            target: aarch64-apple-darwin
+            archive_ext: tar.gz
+            binary_name: twatch
+            use_cross: false
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            archive_ext: zip
+            binary_name: twatch.exe
+            use_cross: false
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Get package version
+        id: package_version
+        shell: bash
+        run: |
+          version="$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --locked
+
+      - name: Build binary
+        shell: bash
+        run: |
+          if [[ "${{ matrix.use_cross }}" == "true" ]]; then
+            cross build --release --target "${{ matrix.target }}"
+          else
+            cargo build --release --target "${{ matrix.target }}"
+          fi
+
+      - name: Package release archive
+        if: matrix.archive_ext == 'tar.gz'
+        shell: bash
+        run: |
+          version="${{ steps.package_version.outputs.version }}"
+          asset="twatch-${version}.${{ matrix.target }}.tar.gz"
+          mkdir -p release
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "release/twatch"
+          cp README.md LICENSE "release/"
+          tar -czf "$asset" -C release twatch README.md LICENSE
+          shasum -a 256 "$asset" > "$asset.sha256"
+
+      - name: Package release archive
+        if: matrix.archive_ext == 'zip'
+        shell: pwsh
+        run: |
+          $version = "${{ steps.package_version.outputs.version }}"
+          $asset = "twatch-$version.${{ matrix.target }}.zip"
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "release/twatch.exe"
+          Copy-Item "README.md","LICENSE" "release/"
+          Compress-Archive -Path release/twatch.exe,release/README.md,release/LICENSE -DestinationPath $asset -Force
+          $hash = (Get-FileHash $asset -Algorithm SHA256).Hash.ToLower()
+          "$hash  $asset" | Out-File "$asset.sha256" -Encoding ascii
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.target }}
+          path: |
+            twatch-${{ steps.package_version.outputs.version }}.${{ matrix.target }}.${{ matrix.archive_ext }}
+            twatch-${{ steps.package_version.outputs.version }}.${{ matrix.target }}.${{ matrix.archive_ext }}.sha256
+
+  create-release:
+    name: Create Draft Release
+    needs: build-assets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Get package version
+        id: package_version
+        shell: bash
+        run: |
+          version="$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve release tag
+        id: release_tag
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+          elif [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            tag="${{ github.event.inputs.tag }}"
+          else
+            tag="v${{ steps.package_version.outputs.version }}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Download release assets
+        uses: actions/download-artifact@v7
+        with:
+          path: release-artifacts
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ steps.release_tag.outputs.tag }}
+          name: ${{ steps.release_tag.outputs.tag }}
+          draft: true
+          files: release-artifacts/*

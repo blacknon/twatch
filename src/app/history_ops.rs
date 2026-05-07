@@ -57,7 +57,8 @@ impl App {
         match self.filter_mode {
             FilterMode::Plain => {
                 let needle = self.filter_query.to_lowercase();
-                lines.iter()
+                lines
+                    .iter()
                     .any(|line| line.to_lowercase().contains(&needle))
             }
             FilterMode::Regex => Regex::new(&self.filter_query)
