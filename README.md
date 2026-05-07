@@ -35,7 +35,7 @@ you move back through history later, similar to `hwatch`.
 ## Install
 
 ```bash
-cargo build --release
+cargo install twatch
 ```
 
 ## Usage
