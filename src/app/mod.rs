@@ -7,8 +7,10 @@ use crate::runner::FrameSource;
 use crate::screen::ScreenSnapshot;
 use crate::screenshot::ScreenshotFormat;
 
+mod history_ops;
 mod input;
 mod runtime;
+mod snapshot;
 mod state;
 #[cfg(test)]
 mod tests;
