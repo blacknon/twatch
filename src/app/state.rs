@@ -40,7 +40,8 @@ impl App {
             limit: cli.limit.max(1),
             checkpoint_interval: cli.checkpoint_interval.max(1),
             compress: cli.compress,
-            logfile: cli.logfile.clone(),
+            logfile: cli.replay.clone().or(cli.logfile.clone()),
+            replay_mode: cli.replay.is_some(),
             screenshot_dir: PathBuf::from(&cli.screenshot_dir),
             screenshot_format: cli.screenshot_format.into(),
             snapshot_on: cli.snapshot_on.clone(),
@@ -55,7 +56,9 @@ impl App {
             snapshot_on_change_cells: cli.snapshot_on_change_cells,
             snapshot_once: cli.snapshot_once,
             snapshot_trigger_fired: false,
-            command_display: if cli.command.is_empty() {
+            command_display: if let Some(path) = &cli.replay {
+                format!("replay: {path}")
+            } else if cli.command.is_empty() {
                 "demo".to_string()
             } else {
                 cli.command.join(" ")

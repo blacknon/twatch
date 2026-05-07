@@ -54,6 +54,9 @@ pub struct Cli {
     #[arg(short = 'l', long)]
     pub logfile: Option<String>,
 
+    #[arg(long, help = "Replay a saved JSONL trace in read-only mode")]
+    pub replay: Option<String>,
+
     #[arg(long, default_value = "/tmp")]
     pub screenshot_dir: String,
 

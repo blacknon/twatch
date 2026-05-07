@@ -36,13 +36,15 @@ impl App {
         }
         drop(tx);
 
-        let size = terminal.size()?;
-        if let Err(err) = self.capture(size.width, size.height.saturating_sub(2)) {
-            if self.is_source_closed_error(&err) {
-                self.source.terminate().ok();
-                return Ok(());
+        if self.current_snapshot.is_none() {
+            let size = terminal.size()?;
+            if let Err(err) = self.capture(size.width, size.height.saturating_sub(2)) {
+                if self.is_source_closed_error(&err) {
+                    self.source.terminate().ok();
+                    return Ok(());
+                }
+                return Err(err);
             }
-            return Err(err);
         }
         let mut needs_redraw = true;
 

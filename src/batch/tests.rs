@@ -71,6 +71,7 @@ fn test_cli() -> Cli {
         aftercommand: None,
         compress: false,
         logfile: None,
+        replay: None,
         screenshot_dir: "/tmp".to_string(),
         screenshot_format: ScreenshotFormatArg::Text,
         snapshot_on: None,

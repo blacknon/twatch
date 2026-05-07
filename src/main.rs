@@ -8,7 +8,7 @@ use crossterm::execute;
 use twatch::app::App;
 use twatch::batch;
 use twatch::cli::Cli;
-use twatch::runner::{DemoRunner, FrameSource, PtyRunner};
+use twatch::runner::{DemoRunner, FrameSource, PtyRunner, ReplayRunner};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -17,7 +17,9 @@ fn main() -> Result<()> {
     }
 
     let (width, height) = crossterm::terminal::size().unwrap_or((120, 40));
-    let source: Box<dyn FrameSource> = if cli.command.is_empty() {
+    let source: Box<dyn FrameSource> = if let Some(path) = &cli.replay {
+        Box::new(ReplayRunner::from_log(path)?)
+    } else if cli.command.is_empty() {
         Box::new(DemoRunner::new())
     } else {
         Box::new(PtyRunner::spawn(
@@ -39,6 +41,9 @@ fn main() -> Result<()> {
 }
 
 fn run_batch(cli: Cli) -> Result<()> {
+    if cli.replay.is_some() {
+        anyhow::bail!("--replay is not supported with --batch");
+    }
     let (width, height) = batch::terminal_size(&cli);
     let mut source: Box<dyn FrameSource> = if cli.command.is_empty() {
         Box::new(DemoRunner::new())

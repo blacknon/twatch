@@ -1,5 +1,6 @@
 use super::{App, FilterMode, FocusPane};
 use crate::cli::{Cli, DiffModeArg, ScreenshotFormatArg};
+use crate::logging::{LogRecord, append_record};
 use crate::runner::{CaptureFrame, FrameSource, SourceEvent};
 use crate::screen::ScreenSnapshot;
 use anyhow::Result;
@@ -399,6 +400,75 @@ fn snapshot_trigger_once_only_saves_first_match() {
 }
 
 #[test]
+fn replay_mode_loads_existing_log() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-replay");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    append_record(
+        cli.replay.as_deref().unwrap(),
+        &LogRecord {
+            label: "a".to_string(),
+            changed: true,
+            timestamp_unix_ms: 1,
+            frame_seq: 1,
+            width: 20,
+            height: 5,
+            changed_cell_count: 3,
+            input_event_count_since_prev: 0,
+            resized: false,
+            resize_from_width: 0,
+            resize_from_height: 0,
+            resize_to_width: 0,
+            resize_to_height: 0,
+            resize_source: String::new(),
+            snapshot: ScreenSnapshot::from_text_lines(20, 5, &["one"]),
+        },
+    )
+    .unwrap();
+    append_record(
+        cli.replay.as_deref().unwrap(),
+        &LogRecord {
+            label: "b".to_string(),
+            changed: true,
+            timestamp_unix_ms: 2,
+            frame_seq: 2,
+            width: 20,
+            height: 5,
+            changed_cell_count: 2,
+            input_event_count_since_prev: 1,
+            resized: false,
+            resize_from_width: 0,
+            resize_from_height: 0,
+            resize_to_width: 0,
+            resize_to_height: 0,
+            resize_source: String::new(),
+            snapshot: ScreenSnapshot::from_text_lines(20, 5, &["two"]),
+        },
+    )
+    .unwrap();
+
+    let app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+
+    assert_eq!(app.history_len(), 1);
+    assert_eq!(app.current_label(), Some("b"));
+    assert_eq!(
+        app.command_display(),
+        &format!("replay: {}", path.to_string_lossy())
+    );
+    assert_eq!(app.selected_lines()[0], "two".to_string());
+
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn save_snapshot_uses_configured_directory_and_format() {
     let mut cli = test_cli();
     let dir = unique_temp_dir("twatch-shot-test");
@@ -456,6 +526,7 @@ fn test_cli() -> Cli {
         aftercommand: None,
         compress: false,
         logfile: None,
+        replay: None,
         screenshot_dir: "/tmp".to_string(),
         screenshot_format: ScreenshotFormatArg::Text,
         snapshot_on: None,

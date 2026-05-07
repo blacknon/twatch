@@ -212,6 +212,7 @@ pub struct App {
     checkpoint_interval: usize,
     compress: bool,
     logfile: Option<String>,
+    replay_mode: bool,
     screenshot_dir: PathBuf,
     screenshot_format: ScreenshotFormat,
     snapshot_on: Option<String>,

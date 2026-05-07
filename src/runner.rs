@@ -12,6 +12,7 @@ use serde::Serialize;
 use time::{OffsetDateTime, format_description::FormatItem, macros::format_description};
 
 use crate::cli::default_shell;
+use crate::logging::load_records;
 use crate::screen::{Cell, ScreenSnapshot, Style, TermColor};
 
 const TIME_FORMAT: &[FormatItem<'static>] =
@@ -62,6 +63,10 @@ pub struct PtyRunner {
 pub struct DemoRunner {
     sequence: u64,
     last_snapshot: Option<ScreenSnapshot>,
+}
+
+pub struct ReplayRunner {
+    frame: CaptureFrame,
 }
 
 struct TerminalState {
@@ -302,6 +307,25 @@ impl DemoRunner {
     }
 }
 
+impl ReplayRunner {
+    pub fn from_log(path: &str) -> Result<Self> {
+        let records = load_records(path)?;
+        let record = records
+            .last()
+            .cloned()
+            .context("replay log does not contain any frames")?;
+        Ok(Self {
+            frame: CaptureFrame {
+                label: record.label,
+                timestamp_unix_ms: record.timestamp_unix_ms,
+                raw_output: record.snapshot.lines().join("\n"),
+                snapshot: record.snapshot,
+                changed: false,
+            },
+        })
+    }
+}
+
 impl FrameSource for DemoRunner {
     fn capture(&mut self, width: u16, height: u16) -> Result<CaptureFrame> {
         self.sequence += 1;
@@ -356,6 +380,40 @@ impl FrameSource for DemoRunner {
 
     fn is_event_driven(&self) -> bool {
         false
+    }
+
+    fn take_update_receiver(&mut self) -> Option<Receiver<SourceEvent>> {
+        None
+    }
+
+    fn terminate(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl FrameSource for ReplayRunner {
+    fn capture(&mut self, _width: u16, _height: u16) -> Result<CaptureFrame> {
+        Ok(self.frame.clone())
+    }
+
+    fn resize(&mut self, _width: u16, _height: u16) -> Result<()> {
+        Ok(())
+    }
+
+    fn send_key(&mut self, _key: KeyEvent) -> Result<()> {
+        Ok(())
+    }
+
+    fn send_mouse(&mut self, _event: MouseEvent, _body_row_offset: u16) -> Result<()> {
+        Ok(())
+    }
+
+    fn has_pending_update(&self) -> bool {
+        false
+    }
+
+    fn is_event_driven(&self) -> bool {
+        true
     }
 
     fn take_update_receiver(&mut self) -> Option<Receiver<SourceEvent>> {
@@ -472,7 +530,9 @@ fn unix_timestamp_millis() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_shell;
+    use super::{ReplayRunner, parse_shell};
+    use crate::logging::{LogRecord, append_record};
+    use crate::screen::ScreenSnapshot;
 
     #[test]
     fn parse_shell_falls_back_to_platform_default() {
@@ -489,6 +549,64 @@ mod tests {
             assert_eq!(program, "sh");
             assert_eq!(args, vec!["-c".to_string()]);
         }
+    }
+
+    #[test]
+    fn replay_runner_returns_latest_frame_from_log() {
+        let path =
+            std::env::temp_dir().join(format!("twatch-replay-runner-{}.jsonl", std::process::id()));
+        let path_str = path.to_string_lossy().into_owned();
+
+        append_record(
+            &path_str,
+            &LogRecord {
+                label: "a".to_string(),
+                changed: true,
+                timestamp_unix_ms: 1,
+                frame_seq: 1,
+                width: 20,
+                height: 5,
+                changed_cell_count: 1,
+                input_event_count_since_prev: 0,
+                resized: false,
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: String::new(),
+                snapshot: ScreenSnapshot::from_text_lines(20, 5, &["one"]),
+            },
+        )
+        .unwrap();
+        append_record(
+            &path_str,
+            &LogRecord {
+                label: "b".to_string(),
+                changed: true,
+                timestamp_unix_ms: 2,
+                frame_seq: 2,
+                width: 20,
+                height: 5,
+                changed_cell_count: 1,
+                input_event_count_since_prev: 0,
+                resized: false,
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: String::new(),
+                snapshot: ScreenSnapshot::from_text_lines(20, 5, &["two"]),
+            },
+        )
+        .unwrap();
+
+        let mut runner = ReplayRunner::from_log(&path_str).unwrap();
+        let frame = super::FrameSource::capture(&mut runner, 20, 5).unwrap();
+
+        assert_eq!(frame.label, "b");
+        assert_eq!(frame.raw_output, "two\n\n\n\n");
+
+        let _ = std::fs::remove_file(path);
     }
 }
 

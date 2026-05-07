@@ -188,6 +188,9 @@ impl App {
     }
 
     pub(super) fn append_log_record(&self) -> Result<()> {
+        if self.replay_mode {
+            return Ok(());
+        }
         let Some(path) = &self.logfile else {
             return Ok(());
         };
