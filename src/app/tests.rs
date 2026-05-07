@@ -13,11 +13,27 @@ use std::time::{SystemTime, UNIX_EPOCH};
 struct MockSource {
     frames: Vec<CaptureFrame>,
     next: usize,
+    child_pause_supported: bool,
+    child_paused: bool,
 }
 
 impl MockSource {
     fn new(frames: Vec<CaptureFrame>) -> Self {
-        Self { frames, next: 0 }
+        Self {
+            frames,
+            next: 0,
+            child_pause_supported: false,
+            child_paused: false,
+        }
+    }
+
+    fn with_child_pause(frames: Vec<CaptureFrame>) -> Self {
+        Self {
+            frames,
+            next: 0,
+            child_pause_supported: true,
+            child_paused: false,
+        }
     }
 }
 
@@ -43,6 +59,18 @@ impl FrameSource for MockSource {
 
     fn send_mouse(&mut self, _event: MouseEvent, _body_row_offset: u16) -> Result<()> {
         Ok(())
+    }
+
+    fn toggle_child_pause(&mut self) -> Result<Option<bool>> {
+        if !self.child_pause_supported {
+            return Ok(None);
+        }
+        self.child_paused = !self.child_paused;
+        Ok(Some(self.child_paused))
+    }
+
+    fn supports_child_pause(&self) -> bool {
+        self.child_pause_supported
     }
 
     fn has_pending_update(&self) -> bool {
@@ -327,6 +355,29 @@ fn inspector_toggles_and_moves() {
         .unwrap();
 
     assert_eq!(app.inspect_cursor(), (1, 0));
+}
+
+#[test]
+fn shift_p_toggles_child_process_pause() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::with_child_pause(vec![frame("a", &["one"])])),
+    )
+    .unwrap();
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::SHIFT))
+        .unwrap();
+    assert!(app.child_paused);
+    assert!(
+        app.status_message
+            .as_deref()
+            .unwrap_or("")
+            .contains("child process paused")
+    );
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('P'), KeyModifiers::SHIFT))
+        .unwrap();
+    assert!(!app.child_paused);
 }
 
 #[test]

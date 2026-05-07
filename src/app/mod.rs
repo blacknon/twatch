@@ -186,6 +186,8 @@ impl InputTraceEvent {
 pub struct App {
     pub interval_secs: f64,
     pub paused: bool,
+    pub child_paused: bool,
+    pub child_pause_supported: bool,
     pub show_history: bool,
     pub show_help: bool,
     pub show_exit_confirm: bool,

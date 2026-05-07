@@ -110,6 +110,7 @@ Options:
 | `0` | Disable diff |
 | `1` | Enable watch diff |
 | `p` | Pause/unpause capture |
+| `Shift+P` | Pause/unpause the child process |
 | `I` | Toggle cell inspector |
 | `Shift+Arrow` | Move inspector cursor |
 | `/` | Filter history by string |
@@ -281,4 +282,5 @@ These projects explore similar terminal wrapping and history-oriented workflows.
 - Mouse support is implemented, but behavior still depends on the child TUI and
   the mouse protocol it enables.
 - Snapshot save defaults to `/tmp`, and text output keeps ANSI color escapes.
-- `p` pauses `twatch` screen capture and history updates. It does not suspend the child process itself.
+- `p` pauses `twatch` screen capture and history updates.
+- `Shift+P` suspends or resumes the wrapped child process.

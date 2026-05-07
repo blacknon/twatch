@@ -12,6 +12,7 @@ use crate::runner::FrameSource;
 
 impl App {
     pub fn new(cli: &Cli, source: Box<dyn FrameSource>) -> Result<Self> {
+        let child_pause_supported = source.supports_child_pause();
         let snapshot_on_regex = cli
             .snapshot_on_regex
             .as_ref()
@@ -37,6 +38,8 @@ impl App {
         let mut app = Self {
             interval_secs: cli.interval,
             paused: false,
+            child_paused: false,
+            child_pause_supported,
             show_history: false,
             show_help: false,
             show_exit_confirm: false,

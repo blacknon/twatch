@@ -122,6 +122,7 @@ impl App {
             (KeyCode::Char('d'), _) => self.cycle_diff_mode(),
             (KeyCode::Char('0'), _) => self.diff_mode = DiffMode::None,
             (KeyCode::Char('1'), _) => self.diff_mode = DiffMode::Watch,
+            (KeyCode::Char('P'), _) => self.toggle_child_pause()?,
             (KeyCode::Char('p'), _) => self.paused = !self.paused,
             (KeyCode::Up, _) => self.move_up(),
             (KeyCode::Down, _) => self.move_down(),
@@ -132,6 +133,25 @@ impl App {
             _ => {}
         }
         Ok(false)
+    }
+
+    fn toggle_child_pause(&mut self) -> Result<()> {
+        match self.source.toggle_child_pause()? {
+            Some(paused) => {
+                self.child_paused = paused;
+                self.status_message = Some(if paused {
+                    "child process paused".to_string()
+                } else {
+                    "child process resumed".to_string()
+                });
+            }
+            None => {
+                self.child_paused = false;
+                self.status_message =
+                    Some("child pause is not available for this source".to_string());
+            }
+        }
+        Ok(())
     }
 
     fn handle_exit_confirm_key(&mut self, key: KeyEvent) -> Result<bool> {

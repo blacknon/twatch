@@ -13,6 +13,7 @@ use time::{OffsetDateTime, format_description::FormatItem, macros::format_descri
 
 use crate::cli::default_shell;
 use crate::logging::load_records;
+use crate::process_control;
 use crate::screen::{Cell, ScreenSnapshot, Style, TermColor};
 
 const TIME_FORMAT: &[FormatItem<'static>] =
@@ -33,6 +34,12 @@ pub trait FrameSource {
     fn resize(&mut self, width: u16, height: u16) -> Result<()>;
     fn send_key(&mut self, key: KeyEvent) -> Result<()>;
     fn send_mouse(&mut self, event: MouseEvent, body_row_offset: u16) -> Result<()>;
+    fn toggle_child_pause(&mut self) -> Result<Option<bool>> {
+        Ok(None)
+    }
+    fn supports_child_pause(&self) -> bool {
+        false
+    }
     fn has_pending_update(&self) -> bool;
     fn is_event_driven(&self) -> bool;
     fn take_update_receiver(&mut self) -> Option<Receiver<SourceEvent>>;
@@ -57,6 +64,7 @@ pub struct PtyRunner {
     aftercommand: Option<String>,
     last_snapshot: Option<ScreenSnapshot>,
     last_size: (u16, u16),
+    child_paused: bool,
     update_rx: Option<Receiver<SourceEvent>>,
 }
 
@@ -122,6 +130,7 @@ impl PtyRunner {
             aftercommand,
             last_snapshot: None,
             last_size: (width.max(1), height.max(1)),
+            child_paused: false,
             update_rx: Some(update_rx),
         })
     }
@@ -275,6 +284,24 @@ impl FrameSource for PtyRunner {
             .context("failed to write mouse event to PTY")?;
         writer.flush().ok();
         Ok(())
+    }
+
+    fn toggle_child_pause(&mut self) -> Result<Option<bool>> {
+        let pid = self
+            .child
+            .process_id()
+            .context("PTY child process id is unavailable")?;
+        if self.child_paused {
+            process_control::resume_process(pid).context("failed to resume child process")?;
+        } else {
+            process_control::suspend_process(pid).context("failed to pause child process")?;
+        }
+        self.child_paused = !self.child_paused;
+        Ok(Some(self.child_paused))
+    }
+
+    fn supports_child_pause(&self) -> bool {
+        true
     }
 
     fn terminate(&mut self) -> Result<()> {
@@ -530,7 +557,7 @@ fn unix_timestamp_millis() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{ReplayRunner, parse_shell};
+    use super::{DemoRunner, FrameSource, ReplayRunner, parse_shell};
     use crate::logging::{LogRecord, append_record};
     use crate::screen::ScreenSnapshot;
 
@@ -601,12 +628,31 @@ mod tests {
         .unwrap();
 
         let mut runner = ReplayRunner::from_log(&path_str).unwrap();
-        let frame = super::FrameSource::capture(&mut runner, 20, 5).unwrap();
+        let frame = FrameSource::capture(&mut runner, 20, 5).unwrap();
 
         assert_eq!(frame.label, "b");
         assert_eq!(frame.raw_output, "two\n\n\n\n");
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn non_pty_sources_do_not_support_child_pause() {
+        let mut demo = DemoRunner::new();
+        assert!(!demo.supports_child_pause());
+        assert!(demo.toggle_child_pause().unwrap().is_none());
+
+        let mut replay = ReplayRunner {
+            frame: super::CaptureFrame {
+                label: "x".to_string(),
+                timestamp_unix_ms: 1,
+                snapshot: ScreenSnapshot::from_text_lines(10, 3, &["x"]),
+                raw_output: "x".to_string(),
+                changed: false,
+            },
+        };
+        assert!(!replay.supports_child_pause());
+        assert!(replay.toggle_child_pause().unwrap().is_none());
     }
 }
 

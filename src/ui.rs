@@ -162,9 +162,21 @@ fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
         "Input Off".to_string()
     };
+    let child_label = if !app.child_pause_supported {
+        "Child N/A".to_string()
+    } else if app.child_paused {
+        "Child Stop".to_string()
+    } else {
+        "Child Run".to_string()
+    };
     let diff_label = app.diff_mode.label().to_string();
-    let right_width =
-        badge_width(&hist_label) + 1 + badge_width(&input_label) + 1 + badge_width(&diff_label);
+    let right_width = badge_width(&hist_label)
+        + 1
+        + badge_width(&input_label)
+        + 1
+        + badge_width(&child_label)
+        + 1
+        + badge_width(&diff_label);
 
     let available_left = usize::from(area.width).saturating_sub(right_width.saturating_add(1));
     let resize_summary = app.selected_resize_summary();
@@ -193,6 +205,16 @@ fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect) {
         status_badge(hist_label, BADGE_CYAN, true),
         gap(HEADER_SUB_BG),
         status_badge(input_label, BADGE_GREEN, true),
+        gap(HEADER_SUB_BG),
+        status_badge(
+            child_label,
+            if app.child_paused {
+                BADGE_MAGENTA
+            } else {
+                BADGE_GREEN
+            },
+            app.child_pause_supported,
+        ),
         gap(HEADER_SUB_BG),
         status_badge(
             diff_label,
@@ -437,6 +459,7 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("S             save selected snapshot"),
         Line::from("d / 0 1       diff mode"),
         Line::from("p             pause history capture"),
+        Line::from("Shift+P       pause child process"),
         Line::from("Alt+Left/Right horizontal scroll"),
     ];
     let help = Paragraph::new(lines)
