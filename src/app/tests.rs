@@ -238,6 +238,29 @@ fn unchanged_frame_does_not_create_new_history_entry() {
 }
 
 #[test]
+fn stores_frame_metadata_for_history_entries() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![
+            frame("a", &["one"]),
+            frame("b", &["two"]),
+        ])),
+    )
+    .unwrap();
+
+    app.capture(20, 5).unwrap();
+    app.capture(20, 5).unwrap();
+
+    let meta = app.history_metadata(0);
+    assert_eq!(meta.label, "a");
+    assert_eq!(meta.frame_seq, 1);
+    assert_eq!(meta.width, 20);
+    assert_eq!(meta.height, 5);
+    assert!(meta.changed);
+    assert!(meta.changed_cell_count > 0);
+}
+
+#[test]
 fn save_snapshot_uses_configured_directory_and_format() {
     let mut cli = test_cli();
     let dir = unique_temp_dir("twatch-shot-test");
@@ -308,6 +331,7 @@ fn test_cli() -> Cli {
 fn frame(label: &str, lines: &[&str]) -> CaptureFrame {
     CaptureFrame {
         label: label.to_string(),
+        timestamp_unix_ms: 1,
         snapshot: ScreenSnapshot::from_text_lines(20, 5, lines),
         raw_output: lines.join("\n"),
         changed: true,
@@ -317,6 +341,7 @@ fn frame(label: &str, lines: &[&str]) -> CaptureFrame {
 fn unchanged_frame(label: &str, lines: &[&str]) -> CaptureFrame {
     CaptureFrame {
         label: label.to_string(),
+        timestamp_unix_ms: 2,
         snapshot: ScreenSnapshot::from_text_lines(20, 5, lines),
         raw_output: lines.join("\n"),
         changed: false,

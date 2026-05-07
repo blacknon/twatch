@@ -10,9 +10,18 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use crate::diff::{LineDiff, WordDiff, diff_lines, diff_words};
 use crate::screen::{Cell, ScreenSnapshot};
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct HistoryMetadata {
     pub label: String,
+    pub timestamp_unix_ms: u64,
+    pub frame_seq: u64,
+    pub changed: bool,
+    pub width: u16,
+    pub height: u16,
+    pub changed_cell_count: usize,
+    pub input_event_count_since_prev: usize,
+    pub resized: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -440,6 +449,7 @@ mod tests {
     fn meta(label: &str) -> HistoryMetadata {
         HistoryMetadata {
             label: label.to_string(),
+            ..HistoryMetadata::default()
         }
     }
 }

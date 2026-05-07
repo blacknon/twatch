@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use crate::cli::{DiffModeArg, ScreenshotFormatArg};
+use crate::history::HistoryMetadata;
 use crate::history::HistoryStore;
 use crate::runner::FrameSource;
 use crate::screen::ScreenSnapshot;
@@ -69,7 +70,44 @@ impl From<DiffModeArg> for DiffMode {
 #[derive(Clone, Debug)]
 pub struct AppHistoryMetadata {
     pub label: String,
+    pub timestamp_unix_ms: u64,
+    pub frame_seq: u64,
     pub changed: bool,
+    pub width: u16,
+    pub height: u16,
+    pub changed_cell_count: usize,
+    pub input_event_count_since_prev: usize,
+    pub resized: bool,
+}
+
+impl AppHistoryMetadata {
+    fn from_history_metadata(value: HistoryMetadata) -> Self {
+        Self {
+            label: value.label,
+            timestamp_unix_ms: value.timestamp_unix_ms,
+            frame_seq: value.frame_seq,
+            changed: value.changed,
+            width: value.width,
+            height: value.height,
+            changed_cell_count: value.changed_cell_count,
+            input_event_count_since_prev: value.input_event_count_since_prev,
+            resized: value.resized,
+        }
+    }
+
+    fn to_history_metadata(&self) -> HistoryMetadata {
+        HistoryMetadata {
+            label: self.label.clone(),
+            timestamp_unix_ms: self.timestamp_unix_ms,
+            frame_seq: self.frame_seq,
+            changed: self.changed,
+            width: self.width,
+            height: self.height,
+            changed_cell_count: self.changed_cell_count,
+            input_event_count_since_prev: self.input_event_count_since_prev,
+            resized: self.resized,
+        }
+    }
 }
 
 pub struct App {
@@ -91,8 +129,7 @@ pub struct App {
     input_mode: InputMode,
     filter_mode: FilterMode,
     current_snapshot: Option<ScreenSnapshot>,
-    current_label: Option<String>,
-    current_changed: bool,
+    current_metadata: Option<AppHistoryMetadata>,
     history: HistoryStore,
     metadata: Vec<AppHistoryMetadata>,
     filtered: Vec<usize>,
@@ -106,6 +143,7 @@ pub struct App {
     source: Box<dyn FrameSource>,
     last_tick: Instant,
     last_mouse_input: Option<Instant>,
+    next_frame_seq: u64,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

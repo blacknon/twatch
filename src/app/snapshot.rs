@@ -4,7 +4,6 @@ use std::time::Instant;
 use anyhow::Result;
 
 use super::{App, FilterMode};
-use crate::history::HistoryMetadata;
 use crate::runner::CaptureFrame;
 use crate::screen::ScreenSnapshot;
 use crate::screenshot::save_snapshot;
@@ -48,6 +47,7 @@ impl App {
     pub fn capture(&mut self, width: u16, height: u16) -> Result<()> {
         let CaptureFrame {
             label,
+            timestamp_unix_ms,
             snapshot,
             raw_output,
             changed,
@@ -63,9 +63,23 @@ impl App {
         } else {
             changed
         };
+        let metadata = self.complete_metadata(
+            &snapshot,
+            super::AppHistoryMetadata {
+                label,
+                timestamp_unix_ms,
+                frame_seq: 0,
+                changed: current_changed,
+                width: snapshot.width(),
+                height: snapshot.height(),
+                changed_cell_count: 0,
+                input_event_count_since_prev: 0,
+                resized: false,
+            },
+        );
 
         self.archive_current_snapshot()?;
-        self.set_current_snapshot(snapshot, label, current_changed);
+        self.set_current_snapshot(snapshot, metadata);
 
         if !self.follow_latest && self.history.is_empty() {
             self.follow_latest = true;
@@ -77,22 +91,15 @@ impl App {
     }
 
     pub(super) fn archive_current_snapshot(&mut self) -> Result<()> {
-        let (Some(previous_snapshot), Some(previous_label)) =
-            (self.current_snapshot.take(), self.current_label.take())
+        let (Some(previous_snapshot), Some(previous_metadata)) =
+            (self.current_snapshot.take(), self.current_metadata.take())
         else {
             return Ok(());
         };
 
-        self.history.push(
-            previous_snapshot,
-            HistoryMetadata {
-                label: previous_label.clone(),
-            },
-        )?;
-        self.metadata.push(super::AppHistoryMetadata {
-            label: previous_label,
-            changed: self.current_changed,
-        });
+        self.history
+            .push(previous_snapshot, previous_metadata.to_history_metadata())?;
+        self.metadata.push(previous_metadata);
         if self.metadata.len() > self.limit {
             self.trim_history()?;
         }
@@ -102,12 +109,40 @@ impl App {
     pub(super) fn set_current_snapshot(
         &mut self,
         snapshot: ScreenSnapshot,
-        label: String,
-        changed: bool,
+        metadata: super::AppHistoryMetadata,
     ) {
         self.current_snapshot = Some(snapshot);
-        self.current_label = Some(label);
-        self.current_changed = changed;
+        self.current_metadata = Some(metadata);
+    }
+
+    pub(super) fn complete_metadata(
+        &mut self,
+        snapshot: &ScreenSnapshot,
+        mut metadata: super::AppHistoryMetadata,
+    ) -> super::AppHistoryMetadata {
+        if metadata.frame_seq == 0 {
+            metadata.frame_seq = self.next_frame_seq;
+        }
+        self.next_frame_seq = self.next_frame_seq.max(metadata.frame_seq.saturating_add(1));
+
+        if metadata.width == 0 {
+            metadata.width = snapshot.width();
+        }
+        if metadata.height == 0 {
+            metadata.height = snapshot.height();
+        }
+
+        let previous = self.current_snapshot.as_ref();
+        if metadata.changed && metadata.changed_cell_count == 0 {
+            metadata.changed_cell_count = snapshot.changed_cell_count_since(previous);
+        }
+        metadata.resized = metadata.resized
+            || previous.is_some_and(|previous_snapshot| {
+                previous_snapshot.width() != snapshot.width()
+                    || previous_snapshot.height() != snapshot.height()
+            });
+
+        metadata
     }
 
     pub(super) fn save_snapshot(&mut self) -> Result<()> {

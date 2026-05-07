@@ -304,7 +304,7 @@ fn draw_watch(frame: &mut Frame<'_>, app: &App, area: Rect) {
 }
 
 fn draw_history_overlay(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let width = if app.show_history { 30 } else { 2 };
+    let width = if app.show_history { 44 } else { 2 };
     let overlay = Rect::new(
         area.right().saturating_sub(width),
         area.y,
@@ -348,12 +348,17 @@ fn draw_history_overlay(frame: &mut Frame<'_>, app: &App, area: Rect) {
             Style::default().fg(Color::Gray)
         };
         ListItem::new(Line::from(format!(
-            "{} {}",
+            "{} {:04} +{:03} {}x{} {}{}",
             if !app.follow_latest && *index == app.selected_index {
                 ">"
             } else {
                 " "
             },
+            meta.frame_seq,
+            meta.changed_cell_count,
+            meta.width,
+            meta.height,
+            if meta.resized { "R " } else { "" },
             meta.label
         )))
         .style(style)

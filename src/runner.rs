@@ -21,6 +21,7 @@ const SCROLLBACK_LINES: usize = 10_000;
 #[derive(Clone, Debug)]
 pub struct CaptureFrame {
     pub label: String,
+    pub timestamp_unix_ms: u64,
     pub snapshot: ScreenSnapshot,
     pub raw_output: String,
     pub changed: bool,
@@ -212,6 +213,7 @@ impl FrameSource for PtyRunner {
 
         Ok(CaptureFrame {
             label: time_label(),
+            timestamp_unix_ms: unix_timestamp_millis(),
             snapshot,
             raw_output,
             changed,
@@ -329,6 +331,7 @@ impl FrameSource for DemoRunner {
 
         Ok(CaptureFrame {
             label: time_label(),
+            timestamp_unix_ms: unix_timestamp_millis(),
             snapshot,
             raw_output,
             changed,
@@ -458,6 +461,13 @@ fn pty_size(width: u16, height: u16) -> PtySize {
         pixel_width: 0,
         pixel_height: 0,
     }
+}
+
+fn unix_timestamp_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_millis() as u64
 }
 
 #[cfg(test)]

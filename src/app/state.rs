@@ -29,8 +29,7 @@ impl App {
             input_mode: InputMode::Normal,
             filter_mode: FilterMode::Plain,
             current_snapshot: None,
-            current_label: None,
-            current_changed: false,
+            current_metadata: None,
             history: HistoryStore::new(cli.checkpoint_interval, cli.compress),
             metadata: Vec::new(),
             filtered: Vec::new(),
@@ -48,6 +47,7 @@ impl App {
             source,
             last_tick: Instant::now(),
             last_mouse_input: None,
+            next_frame_seq: 1,
         };
 
         app.load_history_from_log()?;
@@ -75,7 +75,9 @@ impl App {
     }
 
     pub fn current_label(&self) -> Option<&str> {
-        self.current_label.as_deref()
+        self.current_metadata
+            .as_ref()
+            .map(|metadata| metadata.label.as_str())
     }
 
     pub fn is_search_mode(&self) -> bool {

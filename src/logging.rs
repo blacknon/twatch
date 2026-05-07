@@ -9,19 +9,64 @@ use crate::history::HistoryMetadata;
 use crate::screen::ScreenSnapshot;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LogRecord {
     pub label: String,
     pub changed: bool,
+    pub timestamp_unix_ms: u64,
+    pub frame_seq: u64,
+    pub width: u16,
+    pub height: u16,
+    pub changed_cell_count: usize,
+    pub input_event_count_since_prev: usize,
+    pub resized: bool,
     pub snapshot: ScreenSnapshot,
 }
 
 impl LogRecord {
     pub fn into_parts(self) -> (ScreenSnapshot, HistoryMetadata, bool) {
+        let width = if self.width == 0 {
+            self.snapshot.width()
+        } else {
+            self.width
+        };
+        let height = if self.height == 0 {
+            self.snapshot.height()
+        } else {
+            self.height
+        };
         (
             self.snapshot,
-            HistoryMetadata { label: self.label },
+            HistoryMetadata {
+                label: self.label,
+                timestamp_unix_ms: self.timestamp_unix_ms,
+                frame_seq: self.frame_seq,
+                changed: self.changed,
+                width,
+                height,
+                changed_cell_count: self.changed_cell_count,
+                input_event_count_since_prev: self.input_event_count_since_prev,
+                resized: self.resized,
+            },
             self.changed,
         )
+    }
+}
+
+impl Default for LogRecord {
+    fn default() -> Self {
+        Self {
+            label: String::new(),
+            changed: false,
+            timestamp_unix_ms: 0,
+            frame_seq: 0,
+            width: 0,
+            height: 0,
+            changed_cell_count: 0,
+            input_event_count_since_prev: 0,
+            resized: false,
+            snapshot: ScreenSnapshot::new(0, 0),
+        }
     }
 }
 
@@ -57,4 +102,24 @@ pub fn load_records(path: &str) -> Result<Vec<LogRecord>> {
     }
 
     Ok(records)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LogRecord;
+
+    #[test]
+    fn loads_legacy_log_record_with_defaults() {
+        let record: LogRecord =
+            serde_json::from_str(r#"{"label":"frame-a","changed":true,"snapshot":{"width":4,"height":1,"cells":[{"symbol":"a","style":{"fg":"Default","bg":"Default","bold":false,"italic":false,"underline":false,"inverted":false}},{"symbol":" ","style":{"fg":"Default","bg":"Default","bold":false,"italic":false,"underline":false,"inverted":false}},{"symbol":" ","style":{"fg":"Default","bg":"Default","bold":false,"italic":false,"underline":false,"inverted":false}},{"symbol":" ","style":{"fg":"Default","bg":"Default","bold":false,"italic":false,"underline":false,"inverted":false}}]}}"#)
+                .unwrap();
+
+        let (_snapshot, metadata, changed) = record.into_parts();
+
+        assert!(changed);
+        assert_eq!(metadata.label, "frame-a");
+        assert_eq!(metadata.width, 4);
+        assert_eq!(metadata.height, 1);
+        assert_eq!(metadata.frame_seq, 0);
+    }
 }

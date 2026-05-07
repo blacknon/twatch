@@ -112,12 +112,7 @@ impl App {
             }
             if let Some(snapshot) = self.history.snapshot(index)? {
                 let meta = self.metadata[index].clone();
-                rebuilt.push(
-                    snapshot,
-                    HistoryMetadata {
-                        label: meta.label.clone(),
-                    },
-                )?;
+                rebuilt.push(snapshot, meta.to_history_metadata())?;
                 rebuilt_meta.push(meta);
             }
         }
@@ -142,12 +137,7 @@ impl App {
         for index in start..total {
             if let Some(snapshot) = self.history.snapshot(index)? {
                 let meta = self.metadata[index].clone();
-                rebuilt.push(
-                    snapshot,
-                    HistoryMetadata {
-                        label: meta.label.clone(),
-                    },
-                )?;
+                rebuilt.push(snapshot, meta.to_history_metadata())?;
                 rebuilt_meta.push(meta);
             }
         }
@@ -174,7 +164,14 @@ impl App {
         for record in load_records(path)? {
             let (snapshot, metadata, changed) = record.into_parts();
             self.archive_current_snapshot()?;
-            self.set_current_snapshot(snapshot, metadata.label, changed);
+            let metadata = self.complete_metadata(
+                &snapshot,
+                super::AppHistoryMetadata::from_history_metadata(HistoryMetadata {
+                    changed,
+                    ..metadata
+                }),
+            );
+            self.set_current_snapshot(snapshot, metadata);
         }
 
         if self.metadata.len() > self.limit {
@@ -197,15 +194,22 @@ impl App {
         let Some(snapshot) = &self.current_snapshot else {
             return Ok(());
         };
-        let Some(label) = &self.current_label else {
+        let Some(metadata) = &self.current_metadata else {
             return Ok(());
         };
 
         append_record(
             path,
             &LogRecord {
-                label: label.clone(),
-                changed: self.current_changed,
+                label: metadata.label.clone(),
+                changed: metadata.changed,
+                timestamp_unix_ms: metadata.timestamp_unix_ms,
+                frame_seq: metadata.frame_seq,
+                width: metadata.width,
+                height: metadata.height,
+                changed_cell_count: metadata.changed_cell_count,
+                input_event_count_since_prev: metadata.input_event_count_since_prev,
+                resized: metadata.resized,
                 snapshot: snapshot.clone(),
             },
         )
