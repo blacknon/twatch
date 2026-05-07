@@ -7,22 +7,7 @@ use crate::logging::{LogRecord, append_record, load_records};
 
 impl App {
     pub(super) fn rebuild_filter(&mut self) -> Result<()> {
-        self.filtered = match self.filter_mode {
-            FilterMode::Plain => self.history.find_by_query(&self.filter_query)?,
-            FilterMode::Regex => {
-                if self.filter_query.is_empty() {
-                    (0..self.history.len()).collect()
-                } else {
-                    match Regex::new(&self.filter_query) {
-                        Ok(regex) => self.history.find_by_regex(&regex)?,
-                        Err(err) => {
-                            self.status_message = Some(format!("regex error: {err}"));
-                            Vec::new()
-                        }
-                    }
-                }
-            }
-        };
+        self.filtered = self.find_filtered_history()?;
         self.filtered.reverse();
         if self.filter_query.is_empty() {
             if self.filtered.is_empty() {
@@ -44,22 +29,40 @@ impl App {
         Ok(())
     }
 
+    fn find_filtered_history(&mut self) -> Result<Vec<usize>> {
+        match self.filter_mode {
+            FilterMode::Plain => self.history.find_by_query(&self.filter_query),
+            FilterMode::Regex => {
+                if self.filter_query.is_empty() {
+                    Ok((0..self.history.len()).collect())
+                } else {
+                    match Regex::new(&self.filter_query) {
+                        Ok(regex) => self.history.find_by_regex(&regex),
+                        Err(err) => {
+                            self.status_message = Some(format!("regex error: {err}"));
+                            Ok(Vec::new())
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn current_snapshot_matches_filter(&self) -> bool {
         let Some(snapshot) = &self.current_snapshot else {
             return false;
         };
+        let lines = snapshot.lines();
 
         match self.filter_mode {
             FilterMode::Plain => {
                 let needle = self.filter_query.to_lowercase();
-                snapshot
-                    .lines()
-                    .iter()
+                lines.iter()
                     .any(|line| line.to_lowercase().contains(&needle))
             }
             FilterMode::Regex => Regex::new(&self.filter_query)
                 .ok()
-                .is_some_and(|regex| snapshot.lines().iter().any(|line| regex.is_match(line))),
+                .is_some_and(|regex| lines.iter().any(|line| regex.is_match(line))),
         }
     }
 

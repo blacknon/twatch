@@ -52,9 +52,7 @@ impl App {
                 if self.filter_query.is_empty() {
                     self.show_exit_confirm = true;
                 } else {
-                    self.filter_query.clear();
-                    self.input_mode = InputMode::Normal;
-                    self.rebuild_filter()?;
+                    self.clear_filter()?;
                 }
             }
             (KeyCode::Char('h'), _) => self.show_help = true,
@@ -79,12 +77,10 @@ impl App {
                 }
             }
             (KeyCode::Char('/'), _) => {
-                self.input_mode = InputMode::Search;
-                self.filter_mode = super::FilterMode::Plain;
+                self.start_search(super::FilterMode::Plain);
             }
             (KeyCode::Char('*'), _) => {
-                self.input_mode = InputMode::Search;
-                self.filter_mode = super::FilterMode::Regex;
+                self.start_search(super::FilterMode::Regex);
             }
             (KeyCode::Char('D'), _) => self.delete_selected_history()?,
             (KeyCode::Char('X'), _) => self.clear_history_except_selected()?,
@@ -127,15 +123,9 @@ impl App {
 
     fn handle_search_key(&mut self, key: KeyEvent) -> Result<bool> {
         match key.code {
-            KeyCode::Esc => {
-                self.input_mode = InputMode::Normal;
-                self.filter_query.clear();
-                self.rebuild_filter()?;
-            }
+            KeyCode::Esc => self.clear_filter()?,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.input_mode = InputMode::Normal;
-                self.filter_query.clear();
-                self.rebuild_filter()?;
+                self.clear_filter()?;
             }
             KeyCode::Enter => {
                 self.input_mode = InputMode::Normal;
@@ -227,6 +217,17 @@ impl App {
     fn history_overlay_start(&self, total_width: u16) -> u16 {
         let overlay_width = if self.show_history { 30 } else { 2 };
         total_width.saturating_sub(overlay_width)
+    }
+
+    fn start_search(&mut self, mode: super::FilterMode) {
+        self.input_mode = InputMode::Search;
+        self.filter_mode = mode;
+    }
+
+    fn clear_filter(&mut self) -> Result<()> {
+        self.input_mode = InputMode::Normal;
+        self.filter_query.clear();
+        self.rebuild_filter()
     }
 
     fn toggle_focus(&mut self) {
