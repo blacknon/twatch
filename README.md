@@ -120,7 +120,8 @@ Options:
 | `D` | Delete selected history |
 | `X` | Clear history except selected |
 | `s` | Cycle snapshot format (`text(ANSI)` / `svg`) |
-| `S` | Save selected snapshot |
+| `Shift+S` | Toggle selected frame info |
+| `Ctrl+S` | Save selected snapshot |
 
 ## Example
 

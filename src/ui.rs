@@ -46,6 +46,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
 
     draw_watch(frame, app, chunks[2]);
     draw_history_overlay(frame, app, chunks[2]);
+    draw_history_details(frame, app, area);
 
     if app.show_help {
         draw_help(frame, centered_rect(68, 60, area));
@@ -383,45 +384,47 @@ fn draw_history_overlay(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
         " history "
     };
+    let visible_rows = usize::from(overlay.height.saturating_sub(1));
+    let (start, end) = app.history_overlay_window(visible_rows);
 
-    let mut items: Vec<ListItem<'_>> =
-        vec![
-            ListItem::new(Line::from("  latest")).style(if app.follow_latest {
-                Style::default().fg(Color::White).bg(SELECTION_BG)
-            } else {
-                Style::default().fg(BORDER_ACTIVE)
-            }),
-        ];
+    let mut items: Vec<ListItem<'_>> = Vec::with_capacity(end.saturating_sub(start));
 
-    items.extend(app.filtered_indices().iter().map(|index| {
-        let meta = app.history_metadata(*index);
-        let style = if !app.follow_latest && *index == app.selected_index {
-            Style::default().fg(Color::White).bg(SELECTION_BG)
-        } else if meta.changed {
-            Style::default().fg(Color::Indexed(221))
+    for row in start..end {
+        if row == 0 {
+            items.push(
+                ListItem::new(Line::from("  latest")).style(if app.follow_latest {
+                    Style::default().fg(Color::White).bg(SELECTION_BG)
+                } else {
+                    Style::default().fg(BORDER_ACTIVE)
+                }),
+            );
         } else {
-            Style::default().fg(Color::Gray)
-        };
-        ListItem::new(Line::from(format!(
-            "{} {:04} +{:03} i{:02} {}x{} {}{}",
-            if !app.follow_latest && *index == app.selected_index {
-                ">"
+            let index = app.filtered_indices()[row - 1];
+            let meta = app.history_metadata(index);
+            let style = if !app.follow_latest && index == app.selected_index {
+                Style::default().fg(Color::White).bg(SELECTION_BG)
+            } else if meta.changed {
+                Style::default().fg(Color::Indexed(221))
             } else {
-                " "
-            },
-            meta.frame_seq,
-            meta.changed_cell_count,
-            meta.input_event_count_since_prev,
-            meta.width,
-            meta.height,
-            if meta.resized { "R " } else { "" },
-            meta.label
-        )))
-        .style(style)
-    }));
+                Style::default().fg(Color::Gray)
+            };
+            items.push(
+                ListItem::new(Line::from(format!(
+                    "{} {}",
+                    if !app.follow_latest && index == app.selected_index {
+                        ">"
+                    } else {
+                        " "
+                    },
+                    meta.label
+                )))
+                .style(style),
+            );
+        }
+    }
 
     let mut state = ListState::default();
-    state.select(Some(app.selected_history_row()));
+    state.select(Some(app.selected_history_row_in_window(visible_rows)));
     let list = List::new(items)
         .block(
             Block::default()
@@ -436,6 +439,74 @@ fn draw_history_overlay(frame: &mut Frame<'_>, app: &App, area: Rect) {
         )
         .highlight_symbol(">");
     frame.render_stateful_widget(list, overlay, &mut state);
+}
+
+fn draw_history_details(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    if !app.show_history_details {
+        return;
+    }
+
+    let Some(meta) = app.selected_history_metadata() else {
+        return;
+    };
+
+    let marker = if app.follow_latest {
+        "latest"
+    } else {
+        "selected"
+    };
+    let lines = vec![
+        Line::from(format!("view: {marker}")),
+        Line::from(format!("timestamp: {}", meta.label)),
+        Line::from(format!("frame seq: {}", meta.frame_seq)),
+        Line::from(format!("changed cells: {}", meta.changed_cell_count)),
+        Line::from(format!(
+            "input events: {}",
+            meta.input_event_count_since_prev
+        )),
+        Line::from(format!("screen size: {}x{}", meta.width, meta.height)),
+        Line::from(format!(
+            "resized: {}",
+            if meta.resized { "yes" } else { "no" }
+        )),
+        Line::from(format!(
+            "input summary: {}",
+            if meta.input_summary.is_empty() {
+                "-"
+            } else {
+                meta.input_summary.as_str()
+            }
+        )),
+        Line::from(if meta.resized {
+            format!(
+                "resize info: {}x{} -> {}x{} ({})",
+                meta.resize_from_width,
+                meta.resize_from_height,
+                meta.resize_to_width,
+                meta.resize_to_height,
+                meta.resize_source
+            )
+        } else {
+            "resize info: -".to_string()
+        }),
+        Line::from(""),
+        Line::from("Shift+S: toggle details"),
+        Line::from("Ctrl+S: save snapshot"),
+    ];
+
+    let popup = centered_rect(56, 52, area);
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(
+                Block::default()
+                    .title(" Frame Info ")
+                    .borders(Borders::ALL)
+                    .style(Style::default().bg(PANEL_BG)),
+            )
+            .style(Style::default().fg(Color::White).bg(PANEL_BG)),
+        popup,
+    );
 }
 
 fn draw_help(frame: &mut Frame<'_>, area: Rect) {
@@ -456,7 +527,8 @@ fn draw_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("D             delete selected history"),
         Line::from("X             clear history except selected"),
         Line::from("s             cycle snapshot format (text/svg)"),
-        Line::from("S             save selected snapshot"),
+        Line::from("Shift+S       toggle selected frame info"),
+        Line::from("Ctrl+S        save selected snapshot"),
         Line::from("d / 0 1       diff mode"),
         Line::from("p             pause history capture"),
         Line::from("Shift+P       pause child process"),

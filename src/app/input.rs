@@ -108,6 +108,9 @@ impl App {
                 } else if self.focus == FocusPane::History {
                     self.focus = FocusPane::Watch;
                 }
+                if !self.show_history {
+                    self.show_history_details = false;
+                }
             }
             (KeyCode::Char('/'), _) => {
                 self.start_search(super::FilterMode::Plain);
@@ -115,9 +118,20 @@ impl App {
             (KeyCode::Char('*'), _) => {
                 self.start_search(super::FilterMode::Regex);
             }
+            (KeyCode::Char('S'), KeyModifiers::SHIFT) => {
+                self.show_history_details = !self.show_history_details;
+                if !self.show_history {
+                    self.show_history = true;
+                    self.focus = FocusPane::History;
+                }
+            }
+            (KeyCode::Char('s') | KeyCode::Char('S'), modifiers)
+                if modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.save_snapshot()?
+            }
             (KeyCode::Char('D'), _) => self.delete_selected_history()?,
             (KeyCode::Char('X'), _) => self.clear_history_except_selected()?,
-            (KeyCode::Char('S'), _) => self.save_snapshot()?,
             (KeyCode::Char('s'), _) => self.cycle_screenshot_format(),
             (KeyCode::Char('d'), _) => self.cycle_diff_mode(),
             (KeyCode::Char('0'), _) => self.diff_mode = DiffMode::None,
@@ -249,7 +263,10 @@ impl App {
             MouseEventKind::Down(_) => {
                 if over_history {
                     self.focus = FocusPane::History;
-                    self.select_history_row(usize::from(mouse.row.saturating_sub(2)));
+                    self.select_history_overlay_row(
+                        usize::from(mouse.row.saturating_sub(2)),
+                        self.history_visible_rows(),
+                    );
                     return Ok(true);
                 } else {
                     self.focus = FocusPane::Watch;
@@ -275,6 +292,12 @@ impl App {
     fn history_overlay_start(&self, total_width: u16) -> u16 {
         let overlay_width = if self.show_history { 48 } else { 2 };
         total_width.saturating_sub(overlay_width)
+    }
+
+    fn history_visible_rows(&self) -> usize {
+        crossterm::terminal::size()
+            .map(|(_, height)| usize::from(height.saturating_sub(3)))
+            .unwrap_or(0)
     }
 
     fn start_search(&mut self, mode: super::FilterMode) {
@@ -433,7 +456,7 @@ impl App {
         self.sync_follow_latest_with_selection();
     }
 
-    fn select_history_row(&mut self, row: usize) {
+    pub(super) fn select_history_row(&mut self, row: usize) {
         if row == 0 {
             self.follow_latest = true;
             if let Some(latest) = self.filtered.first().copied() {

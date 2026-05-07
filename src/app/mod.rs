@@ -189,6 +189,7 @@ pub struct App {
     pub child_paused: bool,
     pub child_pause_supported: bool,
     pub show_history: bool,
+    pub show_history_details: bool,
     pub show_help: bool,
     pub show_exit_confirm: bool,
     pub show_inspector: bool,

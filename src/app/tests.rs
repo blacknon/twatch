@@ -358,6 +358,100 @@ fn inspector_toggles_and_moves() {
 }
 
 #[test]
+fn shift_s_toggles_history_details_and_opens_history() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![frame("a", &["one"])])),
+    )
+    .unwrap();
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT))
+        .unwrap();
+
+    assert!(app.show_history);
+    assert!(app.show_history_details);
+    assert_eq!(app.focus, FocusPane::History);
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT))
+        .unwrap();
+    assert!(!app.show_history_details);
+}
+
+#[test]
+fn closing_history_hides_history_details() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![frame("a", &["one"])])),
+    )
+    .unwrap();
+
+    app.show_history = true;
+    app.show_history_details = true;
+    app.focus = FocusPane::History;
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
+        .unwrap();
+
+    assert!(!app.show_history);
+    assert!(!app.show_history_details);
+}
+
+#[test]
+fn history_overlay_window_tracks_selected_row_without_rendering_all_items() {
+    let mut cli = test_cli();
+    cli.limit = 800;
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(
+            (0..700)
+                .map(|i| frame(&format!("{i:04}"), &["x"]))
+                .collect(),
+        )),
+    )
+    .unwrap();
+
+    for _ in 0..700 {
+        app.capture(20, 5).unwrap();
+    }
+    app.follow_latest = false;
+    app.selected_index = 620;
+
+    let (start, end) = app.history_overlay_window(12);
+    assert!(end - start <= 12);
+    assert!(start > 0);
+    assert!(app.selected_history_row() >= start);
+    assert!(app.selected_history_row() < end);
+}
+
+#[test]
+fn history_overlay_row_selection_accounts_for_window_offset() {
+    let mut cli = test_cli();
+    cli.limit = 120;
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(
+            (0..80).map(|i| frame(&format!("{i:04}"), &["x"])).collect(),
+        )),
+    )
+    .unwrap();
+
+    for _ in 0..80 {
+        app.capture(20, 5).unwrap();
+    }
+    app.follow_latest = false;
+    app.selected_index = 40;
+
+    let (start, _) = app.history_overlay_window(10);
+    app.select_history_overlay_row(3, 10);
+
+    if start + 3 == 0 {
+        assert!(app.follow_latest);
+    } else {
+        assert_eq!(app.selected_index, app.filtered_indices()[start + 2]);
+    }
+}
+
+#[test]
 fn shift_p_toggles_child_process_pause() {
     let mut app = App::new(
         &test_cli(),

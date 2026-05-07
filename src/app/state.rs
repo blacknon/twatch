@@ -41,6 +41,7 @@ impl App {
             child_paused: false,
             child_pause_supported,
             show_history: false,
+            show_history_details: false,
             show_help: false,
             show_exit_confirm: false,
             show_inspector: false,
@@ -141,6 +142,14 @@ impl App {
         &self.metadata[index]
     }
 
+    pub fn selected_history_metadata(&self) -> Option<&AppHistoryMetadata> {
+        if self.follow_latest {
+            self.current_metadata.as_ref()
+        } else {
+            self.metadata.get(self.selected_index)
+        }
+    }
+
     pub fn selected_input_summary(&self) -> Option<&str> {
         if self.follow_latest {
             self.current_metadata
@@ -193,6 +202,39 @@ impl App {
                 .map(|position| position + 1)
                 .unwrap_or(0)
         }
+    }
+
+    pub fn history_overlay_window(&self, visible_rows: usize) -> (usize, usize) {
+        let total_rows = self.filtered.len() + 1;
+        if visible_rows == 0 || total_rows == 0 {
+            return (0, 0);
+        }
+        if total_rows <= visible_rows {
+            return (0, total_rows);
+        }
+
+        let selected_row = self.selected_history_row();
+        let half = visible_rows / 2;
+        let max_start = total_rows.saturating_sub(visible_rows);
+        let start = selected_row.saturating_sub(half).min(max_start);
+        let end = usize::min(start + visible_rows, total_rows);
+        (start, end)
+    }
+
+    pub fn selected_history_row_in_window(&self, visible_rows: usize) -> usize {
+        let (start, end) = self.history_overlay_window(visible_rows);
+        if start >= end {
+            return 0;
+        }
+        self.selected_history_row().saturating_sub(start)
+    }
+
+    pub fn select_history_overlay_row(&mut self, row: usize, visible_rows: usize) {
+        let (start, end) = self.history_overlay_window(visible_rows);
+        if start >= end {
+            return;
+        }
+        self.select_history_row(start + row);
     }
 
     pub(super) fn tick_timeout(&self) -> Duration {
