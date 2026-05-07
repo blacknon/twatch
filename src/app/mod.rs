@@ -18,6 +18,7 @@ mod tests;
 enum AppEvent {
     Terminal(crossterm::event::Event),
     SourceUpdated,
+    SourceClosed,
 }
 
 enum LoopControl {

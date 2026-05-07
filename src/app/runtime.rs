@@ -5,6 +5,7 @@ use crossterm::event::{self, Event};
 use ratatui::DefaultTerminal;
 
 use super::{App, AppEvent, LoopControl};
+use crate::runner::SourceEvent;
 use crate::ui;
 
 impl App {
@@ -22,8 +23,12 @@ impl App {
         if let Some(update_rx) = self.source.take_update_receiver() {
             let update_tx = tx.clone();
             std::thread::spawn(move || {
-                while update_rx.recv().is_ok() {
-                    if update_tx.send(AppEvent::SourceUpdated).is_err() {
+                while let Ok(event) = update_rx.recv() {
+                    let app_event = match event {
+                        SourceEvent::Updated => AppEvent::SourceUpdated,
+                        SourceEvent::Closed => AppEvent::SourceClosed,
+                    };
+                    if update_tx.send(app_event).is_err() {
                         break;
                     }
                 }
@@ -64,6 +69,13 @@ impl App {
                             needs_redraw = true;
                         }
                     }
+                    Ok(AppEvent::SourceClosed) => {
+                        if !self.paused && self.source.has_pending_update() {
+                            self.capture_terminal_size(&terminal)?;
+                            terminal.draw(|frame| ui::draw(frame, &self))?;
+                        }
+                        break;
+                    }
                     Err(_) => break,
                 }
             } else {
@@ -74,7 +86,7 @@ impl App {
                         }
                         LoopControl::Break => break,
                     },
-                    Ok(AppEvent::SourceUpdated) => {}
+                    Ok(AppEvent::SourceUpdated) | Ok(AppEvent::SourceClosed) => {}
                     Err(RecvTimeoutError::Timeout) => {
                         if !self.paused && self.should_capture_now() {
                             self.capture_terminal_size(&terminal)?;
