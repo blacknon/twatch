@@ -1,6 +1,6 @@
 [package]
 name = "twatch"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "twatch: Wrap a child TUI app and keep navigable screen history"
 license = "MIT"
