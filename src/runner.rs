@@ -11,6 +11,7 @@ use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}
 use serde::Serialize;
 use time::{OffsetDateTime, format_description::FormatItem, macros::format_description};
 
+use crate::cli::default_shell;
 use crate::screen::{Cell, ScreenSnapshot, Style, TermColor};
 
 const TIME_FORMAT: &[FormatItem<'static>] =
@@ -414,7 +415,10 @@ fn parse_shell(shell: &str) -> (String, Vec<String>) {
         Ok(parts) if !parts.is_empty() => {
             (parts[0].clone(), parts.iter().skip(1).cloned().collect())
         }
-        _ => ("sh".to_string(), vec!["-c".to_string()]),
+        _ => {
+            let parts = shell_words::split(&default_shell()).expect("default shell must parse");
+            (parts[0].clone(), parts.iter().skip(1).cloned().collect())
+        }
     }
 }
 
@@ -432,6 +436,28 @@ fn pty_size(width: u16, height: u16) -> PtySize {
         cols: width.max(1),
         pixel_width: 0,
         pixel_height: 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_shell;
+
+    #[test]
+    fn parse_shell_falls_back_to_platform_default() {
+        let (program, args) = parse_shell("\"");
+
+        #[cfg(windows)]
+        {
+            assert_eq!(program, "cmd");
+            assert_eq!(args, vec!["/C".to_string()]);
+        }
+
+        #[cfg(not(windows))]
+        {
+            assert_eq!(program, "sh");
+            assert_eq!(args, vec!["-c".to_string()]);
+        }
     }
 }
 

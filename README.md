@@ -27,8 +27,8 @@ you move back through history later, similar to [hwatch](https://github.com/blac
 - Filter history with string (`/`) or regex (`*`)
 - Save and load history logs
 - Save the selected snapshot as ANSI text or SVG
-- Run an `aftercommand` hook when output changes
-- Compress in-memory history with `-C`
+- Run an experimental `aftercommand` hook when output changes
+- Compress in-memory history with experimental `-C`
 - Output the current screen in batch mode
 - Propagate terminal resize to both `twatch` and the child TUI
 
@@ -185,10 +185,21 @@ This is useful for debugging long-running screens outside the live UI.
 twatch --logfile ./twatch.jsonl htop
 ```
 
+### Aftercommand
+
+Run a shell hook when the captured screen changes.
+This is still experimental, and high-churn TUIs such as `top`-style apps may
+trigger it very frequently because the hook currently runs on every detected change.
+
+```bash
+twatch -A 'jq -r .output <<<"$TWATCH_DATA" >/tmp/twatch.out' htop
+```
+
 ### Compression
 
 Compress stored history entries in memory to reduce runtime footprint.
-This is most helpful when the wrapped TUI updates frequently.
+This is still experimental.
+It is most helpful when the wrapped TUI updates frequently.
 
 ```bash
 twatch -C htop

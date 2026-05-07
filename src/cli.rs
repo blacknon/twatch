@@ -3,6 +3,16 @@ use std::str::FromStr;
 
 use clap::{Parser, ValueEnum};
 
+#[cfg(windows)]
+pub fn default_shell() -> String {
+    "cmd /C".to_string()
+}
+
+#[cfg(not(windows))]
+pub fn default_shell() -> String {
+    "sh -c".to_string()
+}
+
 #[derive(Debug, Clone, Parser)]
 #[command(author, version, about = "watch for TUI apps", long_about = None)]
 pub struct Cli {
@@ -50,7 +60,7 @@ pub struct Cli {
     #[arg(long, value_enum, default_value_t = ScreenshotFormatArg::Text)]
     pub screenshot_format: ScreenshotFormatArg,
 
-    #[arg(short = 's', long, default_value = "sh -c")]
+    #[arg(short = 's', long, default_value_t = default_shell())]
     pub shell: String,
 
     #[arg(
@@ -190,7 +200,7 @@ impl fmt::Display for CropSpec {
 
 #[cfg(test)]
 mod tests {
-    use super::{CropSpec, DiffModeArg, SizeSpec};
+    use super::{CropSpec, DiffModeArg, SizeSpec, default_shell};
     use clap::ValueEnum;
 
     #[test]
@@ -224,5 +234,14 @@ mod tests {
             .map(|value| value.to_possible_value().unwrap().get_name().to_string())
             .collect();
         assert!(names.contains(&"list".to_string()));
+    }
+
+    #[test]
+    fn default_shell_matches_platform() {
+        #[cfg(windows)]
+        assert_eq!(default_shell(), "cmd /C");
+
+        #[cfg(not(windows))]
+        assert_eq!(default_shell(), "sh -c");
     }
 }
