@@ -7,6 +7,8 @@ license = "MIT"
 readme = "README.md"
 keywords = ["tui", "terminal", "watch", "pty", "history"]
 categories = ["command-line-utilities"]
+repository = "https://github.com/blacknon/twatch"
+homepage = "https://github.com/blacknon/twatch"
 
 [dependencies]
 anyhow = "1.0"
