@@ -46,13 +46,18 @@ Arguments:
 Options:
   -n, --interval <INTERVAL>                        [default: 2]
   -b, --batch
+      --batch-count <BATCH_COUNT>                  Stop after emitting this many batch frames
+      --batch-size <WIDTH,HEIGHT>                  Use a fixed PTY size such as 80,24
+      --batch-crop <X,Y,WIDTH,HEIGHT>              Crop batch output to a rectangle such as 10,5,40,12
+      --batch-diff-only                            Print only added content for batch diff output
+      --batch-no-color                             Disable ANSI color sequences in batch output
   -A, --aftercommand <AFTERCOMMAND>
   -C, --compress
   -l, --logfile <LOGFILE>
       --screenshot-dir <SCREENSHOT_DIR>            [default: /tmp]
       --screenshot-format <SCREENSHOT_FORMAT>      [default: text] [possible values: text, svg]
   -s, --shell <SHELL>                              [default: "sh -c"]
-  -d, --differences <DIFFERENCES>                  [default: none] [possible values: none, watch]
+  -d, --differences <DIFFERENCES>                  Diff mode: watch for TUI mode, list/word for batch mode [default: none] [possible values: none, watch, list, word]
   -L, --limit <LIMIT>                              [default: 500]
       --checkpoint-interval <CHECKPOINT_INTERVAL>  [default: 12]
   -h, --help                                       Print help

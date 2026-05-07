@@ -60,6 +60,7 @@ impl From<DiffModeArg> for DiffMode {
         match value {
             DiffModeArg::None => Self::None,
             DiffModeArg::Watch => Self::Watch,
+            DiffModeArg::List | DiffModeArg::Word => Self::None,
         }
     }
 }
@@ -995,7 +996,10 @@ impl App {
             return;
         }
 
-        let next = usize::min(next_position as usize, self.filtered.len().saturating_sub(1));
+        let next = usize::min(
+            next_position as usize,
+            self.filtered.len().saturating_sub(1),
+        );
         self.selected_index = self.filtered[next];
         self.sync_follow_latest_with_selection();
     }
@@ -1256,6 +1260,11 @@ mod tests {
         Cli {
             interval: 2.0,
             batch: false,
+            batch_count: None,
+            batch_size: None,
+            batch_crop: None,
+            batch_diff_only: false,
+            batch_no_color: false,
             aftercommand: None,
             compress: false,
             logfile: None,

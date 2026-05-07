@@ -52,7 +52,7 @@ pub fn save_snapshot(
     Ok(())
 }
 
-fn render_ansi_text(snapshot: &ScreenSnapshot, header_lines: &[impl AsRef<str>]) -> String {
+pub fn render_ansi_text(snapshot: &ScreenSnapshot, header_lines: &[impl AsRef<str>]) -> String {
     let mut out = String::new();
 
     for line in header_lines.iter().take(2) {

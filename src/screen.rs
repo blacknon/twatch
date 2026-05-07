@@ -135,6 +135,22 @@ impl ScreenSnapshot {
         *self = resized;
     }
 
+    pub fn cropped(&self, x: u16, y: u16, width: u16, height: u16) -> Self {
+        let mut cropped = ScreenSnapshot::new(width, height);
+
+        for dst_y in 0..height {
+            for dst_x in 0..width {
+                let src_x = x.saturating_add(dst_x);
+                let src_y = y.saturating_add(dst_y);
+                if let Some(cell) = self.cell(src_x, src_y) {
+                    cropped.set_cell(dst_x, dst_y, cell.clone());
+                }
+            }
+        }
+
+        cropped
+    }
+
     pub fn cell(&self, x: u16, y: u16) -> Option<&Cell> {
         self.index(x, y).map(|idx| &self.cells[idx])
     }
@@ -248,5 +264,12 @@ mod tests {
             snapshot.lines(),
             vec!["abcd".to_string(), "wxyz".to_string(), "".to_string()]
         );
+    }
+
+    #[test]
+    fn crops_snapshot_region() {
+        let snapshot = ScreenSnapshot::from_text_lines(5, 2, &["abcde", "fghij"]);
+        let cropped = snapshot.cropped(1, 0, 3, 2);
+        assert_eq!(cropped.lines(), vec!["bcd".to_string(), "ghi".to_string()]);
     }
 }
