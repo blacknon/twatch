@@ -2,6 +2,10 @@ use crate::app::{App, FocusPane};
 
 impl App {
     pub(crate) fn move_up(&mut self) {
+        if !self.follow_latest {
+            self.move_history_by(-1);
+            return;
+        }
         match self.ui.focus {
             FocusPane::Watch => self.ui.watch_scroll = self.ui.watch_scroll.saturating_sub(1),
             FocusPane::History => self.move_history_by(-1),
@@ -9,6 +13,10 @@ impl App {
     }
 
     pub(crate) fn move_down(&mut self) {
+        if !self.follow_latest {
+            self.move_history_by(1);
+            return;
+        }
         match self.ui.focus {
             FocusPane::Watch => self.ui.watch_scroll += 1,
             FocusPane::History => self.move_history_by(1),
@@ -16,6 +24,10 @@ impl App {
     }
 
     pub(crate) fn page_up(&mut self) {
+        if !self.follow_latest {
+            self.move_history_by(-10);
+            return;
+        }
         match self.ui.focus {
             FocusPane::Watch => self.ui.watch_scroll = self.ui.watch_scroll.saturating_sub(10),
             FocusPane::History => self.move_history_by(-10),
@@ -23,6 +35,10 @@ impl App {
     }
 
     pub(crate) fn page_down(&mut self) {
+        if !self.follow_latest {
+            self.move_history_by(10);
+            return;
+        }
         match self.ui.focus {
             FocusPane::Watch => self.ui.watch_scroll += 10,
             FocusPane::History => self.move_history_by(10),
@@ -30,6 +46,14 @@ impl App {
     }
 
     pub(crate) fn move_top(&mut self) {
+        if !self.follow_latest {
+            self.follow_latest = true;
+            if let Some(first) = self.filtered.first().copied() {
+                self.selected_index = first;
+            }
+            self.invalidate_view_cache();
+            return;
+        }
         match self.ui.focus {
             FocusPane::Watch => self.ui.watch_scroll = 0,
             FocusPane::History => {
@@ -42,6 +66,15 @@ impl App {
     }
 
     pub(crate) fn move_end(&mut self) {
+        if !self.follow_latest {
+            if let Some(last) = self.filtered.last().copied() {
+                self.selected_index = last;
+                self.follow_latest = false;
+                self.sync_follow_latest_with_selection();
+                self.invalidate_view_cache();
+            }
+            return;
+        }
         match self.ui.focus {
             FocusPane::Watch => self.ui.watch_scroll = usize::MAX / 2,
             FocusPane::History => {

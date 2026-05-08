@@ -562,6 +562,36 @@ fn key_passthrough_is_blocked_when_not_following_latest() {
 }
 
 #[test]
+fn non_latest_arrow_keys_move_history_even_when_watch_has_focus() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![
+            frame("a", &["one"]),
+            frame("b", &["two"]),
+            frame("c", &["three"]),
+            frame("d", &["four"]),
+        ])),
+    )
+    .unwrap();
+
+    app.capture(20, 5).unwrap();
+    app.capture(20, 5).unwrap();
+    app.capture(20, 5).unwrap();
+    app.capture(20, 5).unwrap();
+
+    app.follow_latest = false;
+    app.ui.focus = FocusPane::Watch;
+    app.ui.watch_scroll = 7;
+    app.selected_index = app.filtered_indices()[1];
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+        .unwrap();
+
+    assert_eq!(app.ui.watch_scroll, 7);
+    assert_eq!(app.selected_index, app.filtered_indices()[2]);
+}
+
+#[test]
 fn key_passthrough_is_allowed_when_following_latest() {
     let source = MockSource::new(vec![frame("a", &["one"])]);
     let key_events = source.key_events.clone();
