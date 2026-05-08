@@ -21,6 +21,7 @@ mod snapshot;
 mod state;
 #[cfg(test)]
 mod tests;
+mod trigger;
 mod view;
 
 enum AppEvent {
