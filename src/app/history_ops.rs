@@ -159,6 +159,8 @@ impl App {
         if self.history.is_empty() {
             self.follow_latest = true;
             self.selected_index = 0;
+        } else if self.follow_latest {
+            self.selected_index = self.history.len().saturating_sub(1);
         } else if self.selected_index < start {
             self.selected_index = 0;
             self.sync_follow_latest_with_selection();

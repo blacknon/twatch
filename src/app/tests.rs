@@ -770,6 +770,28 @@ fn selecting_oldest_visible_history_advances_to_next_oldest_when_window_shifts()
     );
 }
 
+#[test]
+fn trimming_keeps_latest_selected_when_following_latest() {
+    let mut cli = test_cli();
+    cli.limit = 5;
+    cli.checkpoint_interval = 2;
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(
+            (0..12).map(|i| frame(&format!("{i:04}"), &["x"])).collect(),
+        )),
+    )
+    .unwrap();
+
+    for _ in 0..12 {
+        app.capture(20, 5).unwrap();
+    }
+
+    assert!(app.follow_latest);
+    assert_eq!(app.selected_history_row(), 0);
+    assert_eq!(app.current_label(), Some("0011"));
+}
+
 fn test_cli() -> Cli {
     Cli {
         interval: 2.0,
