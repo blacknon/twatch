@@ -14,8 +14,10 @@ impl App {
         self.last_mouse_input = Some(Instant::now());
 
         if self.app_input_mode {
-            self.record_child_mouse_event(mouse);
-            self.source.send_mouse(mouse, 2)?;
+            if self.follow_latest {
+                self.record_child_mouse_event(mouse);
+                self.source.send_mouse(mouse, 2)?;
+            }
             return Ok(false);
         }
 
@@ -38,10 +40,13 @@ impl App {
                     self.focus = FocusPane::History;
                     self.move_down();
                     return Ok(true);
-                } else {
+                } else if self.follow_latest {
                     self.focus = FocusPane::Watch;
                     self.record_child_mouse_event(mouse);
                     self.source.send_mouse(mouse, 2)?;
+                    return Ok(previous_focus != self.focus);
+                } else {
+                    self.focus = FocusPane::Watch;
                     return Ok(previous_focus != self.focus);
                 }
             }
@@ -51,10 +56,13 @@ impl App {
                     self.focus = FocusPane::History;
                     self.move_up();
                     return Ok(true);
-                } else {
+                } else if self.follow_latest {
                     self.focus = FocusPane::Watch;
                     self.record_child_mouse_event(mouse);
                     self.source.send_mouse(mouse, 2)?;
+                    return Ok(previous_focus != self.focus);
+                } else {
+                    self.focus = FocusPane::Watch;
                     return Ok(previous_focus != self.focus);
                 }
             }
@@ -69,19 +77,25 @@ impl App {
                         self.history_visible_rows(),
                     );
                     return Ok(true);
-                } else {
+                } else if self.follow_latest {
                     self.focus = FocusPane::Watch;
                     self.record_child_mouse_event(mouse);
                     self.source.send_mouse(mouse, 2)?;
+                    return Ok(previous_focus != self.focus);
+                } else {
+                    self.focus = FocusPane::Watch;
                     return Ok(previous_focus != self.focus);
                 }
             }
             MouseEventKind::Moved => return Ok(false),
             MouseEventKind::Up(_) | MouseEventKind::Drag(_) => {
-                if !over_history {
+                if !over_history && self.follow_latest {
                     self.focus = FocusPane::Watch;
                     self.record_child_mouse_event(mouse);
                     self.source.send_mouse(mouse, 2)?;
+                    return Ok(previous_focus != self.focus);
+                } else if !over_history {
+                    self.focus = FocusPane::Watch;
                     return Ok(previous_focus != self.focus);
                 }
             }
@@ -91,8 +105,7 @@ impl App {
     }
 
     fn history_overlay_start(&self, total_width: u16) -> u16 {
-        let overlay_width = if self.show_history { 48 } else { 2 };
-        total_width.saturating_sub(overlay_width)
+        total_width.saturating_sub(self.history_overlay_width())
     }
 
     fn history_visible_rows(&self) -> usize {

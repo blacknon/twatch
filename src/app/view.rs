@@ -2,6 +2,10 @@ use super::{App, AppHistoryMetadata, ViewCache, ViewCacheKey};
 use crate::screen::ScreenSnapshot;
 
 impl App {
+    pub(crate) fn history_overlay_width(&self) -> u16 {
+        if self.show_history { 36 } else { 2 }
+    }
+
     pub fn visible_history_len(&self) -> usize {
         self.history_len().min(self.limit)
     }

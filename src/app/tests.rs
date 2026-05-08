@@ -5,9 +5,10 @@ use crate::runner::{CaptureFrame, FrameSource, SourceEvent};
 use crate::screen::ScreenSnapshot;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyModifiers};
-use crossterm::event::{KeyEvent, MouseEvent};
+use crossterm::event::{KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 struct MockSource {
@@ -15,6 +16,7 @@ struct MockSource {
     next: usize,
     child_pause_supported: bool,
     child_paused: bool,
+    mouse_events: Arc<Mutex<Vec<MouseEvent>>>,
 }
 
 impl MockSource {
@@ -24,6 +26,7 @@ impl MockSource {
             next: 0,
             child_pause_supported: false,
             child_paused: false,
+            mouse_events: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -33,6 +36,7 @@ impl MockSource {
             next: 0,
             child_pause_supported: true,
             child_paused: false,
+            mouse_events: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -57,7 +61,8 @@ impl FrameSource for MockSource {
         Ok(())
     }
 
-    fn send_mouse(&mut self, _event: MouseEvent, _body_row_offset: u16) -> Result<()> {
+    fn send_mouse(&mut self, event: MouseEvent, _body_row_offset: u16) -> Result<()> {
+        self.mouse_events.lock().unwrap().push(event);
         Ok(())
     }
 
@@ -502,6 +507,41 @@ fn history_overlay_row_selection_accounts_for_window_offset() {
     } else {
         assert_eq!(app.selected_index, app.filtered_indices()[start + 2]);
     }
+}
+
+#[test]
+fn mouse_passthrough_is_blocked_when_not_following_latest() {
+    let source = MockSource::new(vec![frame("a", &["one"])]);
+    let mouse_events = source.mouse_events.clone();
+    let mut app = App::new(&test_cli(), Box::new(source)).unwrap();
+
+    app.follow_latest = false;
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 1,
+        row: 3,
+        modifiers: KeyModifiers::NONE,
+    })
+    .unwrap();
+
+    assert!(mouse_events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn mouse_passthrough_is_allowed_when_following_latest() {
+    let source = MockSource::new(vec![frame("a", &["one"])]);
+    let mouse_events = source.mouse_events.clone();
+    let mut app = App::new(&test_cli(), Box::new(source)).unwrap();
+
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 1,
+        row: 3,
+        modifiers: KeyModifiers::NONE,
+    })
+    .unwrap();
+
+    assert_eq!(mouse_events.lock().unwrap().len(), 1);
 }
 
 #[test]

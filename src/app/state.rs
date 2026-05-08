@@ -1,10 +1,8 @@
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use crate::aftercommand::{AfterCommandConfig, AfterCommandRuntime};
-use anyhow::{Context, Result};
-use regex::Regex;
+use anyhow::Result;
 
+use super::config::AppConfig;
 use super::{App, AppHistoryMetadata, FilterMode, FocusPane, InputMode};
 use crate::cli::Cli;
 use crate::history::HistoryStore;
@@ -12,41 +10,19 @@ use crate::runner::FrameSource;
 
 impl App {
     pub fn new(cli: &Cli, source: Box<dyn FrameSource>) -> Result<Self> {
-        let child_pause_supported = source.supports_child_pause();
-        let snapshot_on_regex = cli
-            .snapshot_on_regex
-            .as_ref()
-            .map(|pattern| {
-                Regex::new(pattern).with_context(|| format!("invalid snapshot regex: {pattern}"))
-            })
-            .transpose()?;
-        let aftercommand_regex = cli
-            .aftercommand_regex
-            .as_ref()
-            .map(|pattern| {
-                Regex::new(pattern)
-                    .with_context(|| format!("invalid aftercommand regex: {pattern}"))
-            })
-            .transpose()?;
-        let command_display = if let Some(path) = &cli.replay {
-            format!("replay: {path}")
-        } else if cli.command.is_empty() {
-            "demo".to_string()
-        } else {
-            cli.command.join(" ")
-        };
+        let config = AppConfig::from_cli(cli, source.supports_child_pause())?;
         let mut app = Self {
-            interval_secs: cli.interval,
+            interval_secs: config.interval_secs,
             paused: false,
             child_paused: false,
-            child_pause_supported,
+            child_pause_supported: config.child_pause_supported,
             show_history: false,
             show_history_details: false,
             show_help: false,
             show_exit_confirm: false,
             show_inspector: false,
             diff_only: false,
-            diff_mode: cli.differences.into(),
+            diff_mode: config.diff_mode,
             focus: FocusPane::Watch,
             app_input_mode: false,
             watch_scroll: 0,
@@ -61,34 +37,23 @@ impl App {
             filter_mode: FilterMode::Plain,
             current_snapshot: None,
             current_metadata: None,
-            history: HistoryStore::new(cli.checkpoint_interval, cli.compress),
+            history: HistoryStore::new(config.checkpoint_interval, config.compress),
             metadata: Vec::new(),
             filtered: Vec::new(),
-            limit: cli.limit.max(1),
-            checkpoint_interval: cli.checkpoint_interval.max(1),
-            compress: cli.compress,
-            logfile: cli.replay.clone().or(cli.logfile.clone()),
-            replay_mode: cli.replay.is_some(),
-            screenshot_dir: PathBuf::from(&cli.screenshot_dir),
-            screenshot_format: cli.screenshot_format.into(),
-            snapshot_on: cli.snapshot_on.clone(),
-            snapshot_on_regex,
-            snapshot_on_change_cells: cli.snapshot_on_change_cells,
-            snapshot_once: cli.snapshot_once,
+            limit: config.history_limit,
+            checkpoint_interval: config.checkpoint_interval,
+            compress: config.compress,
+            logfile: config.logfile,
+            replay_mode: config.replay_mode,
+            screenshot_dir: config.screenshot_dir,
+            screenshot_format: config.screenshot_format,
+            snapshot_on: config.snapshot_on,
+            snapshot_on_regex: config.snapshot_on_regex,
+            snapshot_on_change_cells: config.snapshot_on_change_cells,
+            snapshot_once: config.snapshot_once,
             snapshot_trigger_fired: false,
-            aftercommand_runtime: cli.aftercommand.as_ref().map(|hook| {
-                AfterCommandRuntime::new(AfterCommandConfig {
-                    hook: hook.clone(),
-                    shell: cli.shell.clone(),
-                    command_display: command_display.clone(),
-                    regex: aftercommand_regex.clone(),
-                    changed_cells: cli.aftercommand_change_cells,
-                    every: cli.aftercommand_every,
-                    debounce_ms: cli.aftercommand_debounce_ms,
-                    timeout_ms: cli.aftercommand_timeout_ms,
-                })
-            }),
-            command_display,
+            aftercommand_runtime: config.aftercommand_runtime,
+            command_display: config.command_display,
             source,
             last_tick: Instant::now(),
             last_mouse_input: None,
@@ -104,6 +69,16 @@ impl App {
 
         app.load_history_from_log()?;
         Ok(app)
+    }
+
+    pub(super) fn command_display_from_cli(cli: &Cli) -> String {
+        if let Some(path) = &cli.replay {
+            format!("replay: {path}")
+        } else if cli.command.is_empty() {
+            "demo".to_string()
+        } else {
+            cli.command.join(" ")
+        }
     }
 
     pub fn history_len(&self) -> usize {

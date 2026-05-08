@@ -10,7 +10,7 @@ use super::{BORDER_ACTIVE, BORDER_IDLE, PANEL_BG, SELECTION_BG};
 use crate::ui::dialogs::centered_rect;
 
 pub(super) fn draw_history_overlay(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let width = if app.show_history { 48 } else { 2 };
+    let width = app.history_overlay_width();
     let overlay = Rect::new(
         area.right().saturating_sub(width),
         area.y,
