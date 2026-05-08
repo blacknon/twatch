@@ -16,23 +16,19 @@ fn main() -> Result<()> {
         return run_batch(cli);
     }
 
-    let (width, height) = crossterm::terminal::size().unwrap_or((120, 40));
-    let source: Box<dyn FrameSource> = if let Some(path) = &cli.replay {
-        Box::new(ReplayRunner::from_log(path)?)
-    } else if cli.command.is_empty() {
-        Box::new(DemoRunner::new())
-    } else {
-        Box::new(PtyRunner::spawn(
-            &cli.shell,
-            cli.command.join(" "),
-            None,
-            width,
-            height.saturating_sub(2),
-        )?)
-    };
+    run_interactive(cli)
+}
 
-    let mut stdout = std::io::stdout();
-    execute!(stdout, EnableMouseCapture)?;
+fn run_interactive(cli: Cli) -> Result<()> {
+    let (width, height) = crossterm::terminal::size().unwrap_or((120, 40));
+    let source = build_source(
+        &cli,
+        SourceBuildMode::Interactive,
+        width,
+        height.saturating_sub(2),
+    )?;
+
+    execute!(std::io::stdout(), EnableMouseCapture)?;
     let terminal = ratatui::init();
     let result = App::new(&cli, source)?.run(terminal);
     ratatui::restore();
@@ -41,21 +37,8 @@ fn main() -> Result<()> {
 }
 
 fn run_batch(cli: Cli) -> Result<()> {
-    if cli.replay.is_some() {
-        anyhow::bail!("--replay is not supported with --batch");
-    }
     let (width, height) = batch::terminal_size(&cli);
-    let mut source: Box<dyn FrameSource> = if cli.command.is_empty() {
-        Box::new(DemoRunner::new())
-    } else {
-        Box::new(PtyRunner::spawn(
-            &cli.shell,
-            cli.command.join(" "),
-            cli.aftercommand.clone(),
-            width,
-            height,
-        )?)
-    };
+    let mut source = build_source(&cli, SourceBuildMode::Batch, width, height)?;
 
     let interval = Duration::from_secs_f64(cli.interval.max(0.2));
     let mut stdout = std::io::stdout();
@@ -79,4 +62,42 @@ fn run_batch(cli: Cli) -> Result<()> {
 
     source.terminate().ok();
     Ok(())
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum SourceBuildMode {
+    Interactive,
+    Batch,
+}
+
+fn build_source(
+    cli: &Cli,
+    mode: SourceBuildMode,
+    width: u16,
+    height: u16,
+) -> Result<Box<dyn FrameSource>> {
+    if mode == SourceBuildMode::Batch && cli.replay.is_some() {
+        anyhow::bail!("--replay is not supported with --batch");
+    }
+
+    if let Some(path) = &cli.replay {
+        return Ok(Box::new(ReplayRunner::from_log(path)?));
+    }
+
+    if cli.command.is_empty() {
+        return Ok(Box::new(DemoRunner::new()));
+    }
+
+    let aftercommand = match mode {
+        SourceBuildMode::Interactive => None,
+        SourceBuildMode::Batch => cli.aftercommand.clone(),
+    };
+
+    Ok(Box::new(PtyRunner::spawn(
+        &cli.shell,
+        cli.command.join(" "),
+        aftercommand,
+        width,
+        height,
+    )?))
 }
