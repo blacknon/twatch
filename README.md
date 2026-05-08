@@ -123,6 +123,12 @@ Options:
 | `Shift+S` | Toggle selected frame info |
 | `Ctrl+S` | Save selected snapshot |
 
+### Notes
+
+- Mouse passthrough is enabled only while viewing `latest`
+- `p` pauses `twatch` capture, not the child process
+- `Shift+P` pauses or resumes the child process itself
+
 ## Example
 
 

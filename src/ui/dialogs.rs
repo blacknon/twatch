@@ -19,6 +19,7 @@ pub(super) fn draw_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("Ctrl-g        leave child app input mode"),
         Line::from("Left/Right    focus watch/history"),
         Line::from("Up/Down       child app in watch pane / move history"),
+        Line::from("Mouse         passthrough only on latest"),
         Line::from("Backspace     toggle history pane"),
         Line::from("/             search history"),
         Line::from("*             regex filter history"),
@@ -28,7 +29,7 @@ pub(super) fn draw_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("Shift+S       toggle selected frame info"),
         Line::from("Ctrl+S        save selected snapshot"),
         Line::from("d / 0 1       diff mode"),
-        Line::from("p             pause history capture"),
+        Line::from("p             pause twatch capture"),
         Line::from("Shift+P       pause child process"),
         Line::from("Alt+Left/Right horizontal scroll"),
     ];
