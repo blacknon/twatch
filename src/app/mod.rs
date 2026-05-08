@@ -221,6 +221,42 @@ impl ViewState {
     }
 }
 
+pub(crate) struct UiState {
+    pub(crate) show_history: bool,
+    pub(crate) show_history_details: bool,
+    pub(crate) show_help: bool,
+    pub(crate) show_exit_confirm: bool,
+    pub(crate) show_inspector: bool,
+    pub(crate) focus: FocusPane,
+    pub(crate) app_input_mode: bool,
+    pub(crate) watch_scroll: usize,
+    pub(crate) horizontal_scroll: usize,
+    pub(crate) inspect_x: u16,
+    pub(crate) inspect_y: u16,
+    pub(crate) filter_query: String,
+    pub(crate) status_message: Option<String>,
+}
+
+impl UiState {
+    fn new() -> Self {
+        Self {
+            show_history: false,
+            show_history_details: false,
+            show_help: false,
+            show_exit_confirm: false,
+            show_inspector: false,
+            focus: FocusPane::Watch,
+            app_input_mode: false,
+            watch_scroll: 0,
+            horizontal_scroll: 0,
+            inspect_x: 0,
+            inspect_y: 0,
+            filter_query: String::new(),
+            status_message: None,
+        }
+    }
+}
+
 impl InputTraceEvent {
     fn summary(&self) -> String {
         match &self.kind {
@@ -240,21 +276,8 @@ pub struct App {
     pub paused: bool,
     pub child_paused: bool,
     pub child_pause_supported: bool,
-    pub show_history: bool,
-    pub show_history_details: bool,
-    pub show_help: bool,
-    pub show_exit_confirm: bool,
-    pub show_inspector: bool,
     pub diff_only: bool,
     pub diff_mode: DiffMode,
-    pub focus: FocusPane,
-    pub app_input_mode: bool,
-    pub watch_scroll: usize,
-    pub horizontal_scroll: usize,
-    pub inspect_x: u16,
-    pub inspect_y: u16,
-    pub filter_query: String,
-    pub status_message: Option<String>,
     pub selected_index: usize,
     pub follow_latest: bool,
     input_mode: InputMode,
@@ -285,6 +308,7 @@ pub struct App {
     next_frame_seq: u64,
     trace: TraceState,
     view: ViewState,
+    pub(crate) ui: UiState,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

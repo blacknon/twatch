@@ -9,18 +9,18 @@ impl App {
             return Ok(false);
         }
 
-        self.status_message = None;
+        self.ui.status_message = None;
 
-        if self.show_exit_confirm {
+        if self.ui.show_exit_confirm {
             return self.handle_exit_confirm_key(key);
         }
 
-        if self.show_help {
+        if self.ui.show_help {
             match key.code {
                 KeyCode::Char('h') | KeyCode::Esc => {
-                    self.show_help = false;
+                    self.ui.show_help = false;
                 }
-                KeyCode::Char('q') => self.show_exit_confirm = true,
+                KeyCode::Char('q') => self.ui.show_exit_confirm = true,
                 _ => {}
             }
             return Ok(false);
@@ -30,9 +30,9 @@ impl App {
             return self.handle_search_key(key);
         }
 
-        if self.app_input_mode {
+        if self.ui.app_input_mode {
             if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
-                self.app_input_mode = false;
+                self.ui.app_input_mode = false;
                 return Ok(false);
             }
             self.record_child_key_event(key);
@@ -40,29 +40,29 @@ impl App {
             return Ok(false);
         }
 
-        if self.focus == FocusPane::Watch && self.should_passthrough_to_app(key) {
+        if self.ui.focus == FocusPane::Watch && self.should_passthrough_to_app(key) {
             self.record_child_key_event(key);
             self.source.send_key(key)?;
             return Ok(false);
         }
 
-        if self.show_inspector && self.focus == FocusPane::Watch {
+        if self.ui.show_inspector && self.ui.focus == FocusPane::Watch {
             match (key.code, key.modifiers) {
                 (KeyCode::Up, KeyModifiers::SHIFT) => {
-                    self.inspect_y = self.inspect_y.saturating_sub(1);
+                    self.ui.inspect_y = self.ui.inspect_y.saturating_sub(1);
                     return Ok(false);
                 }
                 (KeyCode::Down, KeyModifiers::SHIFT) => {
-                    self.inspect_y = self.inspect_y.saturating_add(1);
+                    self.ui.inspect_y = self.ui.inspect_y.saturating_add(1);
                     self.clamp_inspector_to_snapshot();
                     return Ok(false);
                 }
                 (KeyCode::Left, KeyModifiers::SHIFT) => {
-                    self.inspect_x = self.inspect_x.saturating_sub(1);
+                    self.ui.inspect_x = self.ui.inspect_x.saturating_sub(1);
                     return Ok(false);
                 }
                 (KeyCode::Right, KeyModifiers::SHIFT) => {
-                    self.inspect_x = self.inspect_x.saturating_add(1);
+                    self.ui.inspect_x = self.ui.inspect_x.saturating_add(1);
                     self.clamp_inspector_to_snapshot();
                     return Ok(false);
                 }
@@ -71,49 +71,49 @@ impl App {
         }
 
         match (key.code, key.modifiers) {
-            (KeyCode::Char('q'), _) => self.show_exit_confirm = true,
+            (KeyCode::Char('q'), _) => self.ui.show_exit_confirm = true,
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                if self.filter_query.is_empty() {
-                    self.show_exit_confirm = true;
+                if self.ui.filter_query.is_empty() {
+                    self.ui.show_exit_confirm = true;
                 } else {
                     self.clear_filter()?;
                 }
             }
-            (KeyCode::Char('h'), _) => self.show_help = true,
+            (KeyCode::Char('h'), _) => self.ui.show_help = true,
             (KeyCode::Char('I'), _) => {
-                self.show_inspector = !self.show_inspector;
+                self.ui.show_inspector = !self.ui.show_inspector;
                 self.clamp_inspector_to_snapshot();
             }
             (KeyCode::Char('i'), _) => {
-                if self.focus == FocusPane::Watch {
-                    self.app_input_mode = true;
+                if self.ui.focus == FocusPane::Watch {
+                    self.ui.app_input_mode = true;
                 }
             }
             (KeyCode::Tab, _) => self.toggle_focus(),
             (KeyCode::Left, KeyModifiers::ALT) => {
-                self.horizontal_scroll = self.horizontal_scroll.saturating_sub(4)
+                self.ui.horizontal_scroll = self.ui.horizontal_scroll.saturating_sub(4)
             }
-            (KeyCode::Right, KeyModifiers::ALT) => self.horizontal_scroll += 4,
-            (KeyCode::Left, _) => self.focus = FocusPane::Watch,
-            (KeyCode::Right, _) => self.focus = FocusPane::History,
+            (KeyCode::Right, KeyModifiers::ALT) => self.ui.horizontal_scroll += 4,
+            (KeyCode::Left, _) => self.ui.focus = FocusPane::Watch,
+            (KeyCode::Right, _) => self.ui.focus = FocusPane::History,
             (KeyCode::Backspace, _) => {
-                self.show_history = !self.show_history;
-                if self.show_history {
-                    self.focus = FocusPane::History;
-                } else if self.focus == FocusPane::History {
-                    self.focus = FocusPane::Watch;
+                self.ui.show_history = !self.ui.show_history;
+                if self.ui.show_history {
+                    self.ui.focus = FocusPane::History;
+                } else if self.ui.focus == FocusPane::History {
+                    self.ui.focus = FocusPane::Watch;
                 }
-                if !self.show_history {
-                    self.show_history_details = false;
+                if !self.ui.show_history {
+                    self.ui.show_history_details = false;
                 }
             }
             (KeyCode::Char('/'), _) => self.start_search(super::super::FilterMode::Plain),
             (KeyCode::Char('*'), _) => self.start_search(super::super::FilterMode::Regex),
             (KeyCode::Char('S'), KeyModifiers::SHIFT) => {
-                self.show_history_details = !self.show_history_details;
-                if !self.show_history {
-                    self.show_history = true;
-                    self.focus = FocusPane::History;
+                self.ui.show_history_details = !self.ui.show_history_details;
+                if !self.ui.show_history {
+                    self.ui.show_history = true;
+                    self.ui.focus = FocusPane::History;
                 }
             }
             (KeyCode::Char('s') | KeyCode::Char('S'), modifiers)

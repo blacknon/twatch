@@ -158,7 +158,7 @@ impl App {
 
     pub(super) fn save_snapshot(&mut self) -> Result<()> {
         let Some(snapshot) = self.selected_snapshot() else {
-            self.status_message = Some("no snapshot to save".to_string());
+            self.ui.status_message = Some("no snapshot to save".to_string());
             return Ok(());
         };
 
@@ -183,11 +183,11 @@ impl App {
                     FilterMode::Plain => "/",
                     FilterMode::Regex => "*",
                 },
-                self.filter_query
+                self.ui.filter_query
             ),
         ];
         save_snapshot(&snapshot, &path, self.screenshot_format, &header)?;
-        self.status_message = Some(format!(
+        self.ui.status_message = Some(format!(
             "snapshot saved: {} ({})",
             display_tmp_path(&path),
             self.screenshot_format.label()
@@ -197,7 +197,7 @@ impl App {
 
     pub(super) fn cycle_screenshot_format(&mut self) {
         self.screenshot_format = self.screenshot_format.cycle();
-        self.status_message = Some(format!(
+        self.ui.status_message = Some(format!(
             "snapshot format: {} -> {}",
             self.screenshot_format.label(),
             display_tmp_path(&self.screenshot_dir)

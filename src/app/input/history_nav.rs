@@ -2,36 +2,36 @@ use crate::app::{App, FocusPane};
 
 impl App {
     pub(crate) fn move_up(&mut self) {
-        match self.focus {
-            FocusPane::Watch => self.watch_scroll = self.watch_scroll.saturating_sub(1),
+        match self.ui.focus {
+            FocusPane::Watch => self.ui.watch_scroll = self.ui.watch_scroll.saturating_sub(1),
             FocusPane::History => self.move_history_by(-1),
         }
     }
 
     pub(crate) fn move_down(&mut self) {
-        match self.focus {
-            FocusPane::Watch => self.watch_scroll += 1,
+        match self.ui.focus {
+            FocusPane::Watch => self.ui.watch_scroll += 1,
             FocusPane::History => self.move_history_by(1),
         }
     }
 
     pub(crate) fn page_up(&mut self) {
-        match self.focus {
-            FocusPane::Watch => self.watch_scroll = self.watch_scroll.saturating_sub(10),
+        match self.ui.focus {
+            FocusPane::Watch => self.ui.watch_scroll = self.ui.watch_scroll.saturating_sub(10),
             FocusPane::History => self.move_history_by(-10),
         }
     }
 
     pub(crate) fn page_down(&mut self) {
-        match self.focus {
-            FocusPane::Watch => self.watch_scroll += 10,
+        match self.ui.focus {
+            FocusPane::Watch => self.ui.watch_scroll += 10,
             FocusPane::History => self.move_history_by(10),
         }
     }
 
     pub(crate) fn move_top(&mut self) {
-        match self.focus {
-            FocusPane::Watch => self.watch_scroll = 0,
+        match self.ui.focus {
+            FocusPane::Watch => self.ui.watch_scroll = 0,
             FocusPane::History => {
                 self.follow_latest = true;
                 if let Some(first) = self.filtered.first().copied() {
@@ -42,8 +42,8 @@ impl App {
     }
 
     pub(crate) fn move_end(&mut self) {
-        match self.focus {
-            FocusPane::Watch => self.watch_scroll = usize::MAX / 2,
+        match self.ui.focus {
+            FocusPane::Watch => self.ui.watch_scroll = usize::MAX / 2,
             FocusPane::History => {
                 if let Some(last) = self.filtered.last().copied() {
                     self.selected_index = last;

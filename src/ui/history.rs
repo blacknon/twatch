@@ -18,7 +18,7 @@ pub(super) fn draw_history_overlay(frame: &mut Frame<'_>, app: &App, area: Rect)
         area.height,
     );
 
-    if !app.show_history {
+    if !app.ui.show_history {
         frame.render_widget(
             Paragraph::new("Hi")
                 .alignment(Alignment::Center)
@@ -29,7 +29,7 @@ pub(super) fn draw_history_overlay(frame: &mut Frame<'_>, app: &App, area: Rect)
     }
 
     frame.render_widget(Clear, overlay);
-    let title = if app.focus == FocusPane::History {
+    let title = if app.ui.focus == FocusPane::History {
         " History "
     } else {
         " history "
@@ -81,7 +81,7 @@ pub(super) fn draw_history_overlay(frame: &mut Frame<'_>, app: &App, area: Rect)
                 .title(title)
                 .style(Style::default().bg(PANEL_BG))
                 .borders(Borders::LEFT)
-                .border_style(if app.focus == FocusPane::History {
+                .border_style(if app.ui.focus == FocusPane::History {
                     Style::default().fg(BORDER_ACTIVE)
                 } else {
                     Style::default().fg(BORDER_IDLE)
@@ -92,7 +92,7 @@ pub(super) fn draw_history_overlay(frame: &mut Frame<'_>, app: &App, area: Rect)
 }
 
 pub(super) fn draw_history_details(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    if !app.show_history_details {
+    if !app.ui.show_history_details {
         return;
     }
 

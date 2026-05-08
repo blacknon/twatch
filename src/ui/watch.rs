@@ -12,7 +12,7 @@ use crate::screen::{Cell, ScreenSnapshot};
 use super::{BORDER_ACTIVE, DIFF_BG, DIFF_FG, PANEL_BG, SEARCH_BG};
 
 pub(super) fn draw_watch(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let watch_chunks = if app.show_inspector {
+    let watch_chunks = if app.ui.show_inspector {
         Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Min(1), Constraint::Length(6)])
@@ -38,11 +38,11 @@ pub(super) fn draw_watch(frame: &mut Frame<'_>, app: &App, area: Rect) {
             previous: previous.as_ref(),
             diff_mode: app.diff_mode,
             diff_only: app.diff_only,
-            search_query: &app.filter_query,
+            search_query: &app.ui.filter_query,
             filter_mode: app.filter_mode(),
-            vertical_scroll: app.watch_scroll,
-            horizontal_scroll: app.horizontal_scroll,
-            inspect_cell: if app.show_inspector {
+            vertical_scroll: app.ui.watch_scroll,
+            horizontal_scroll: app.ui.horizontal_scroll,
+            inspect_cell: if app.ui.show_inspector {
                 Some((inspect_x, inspect_y))
             } else {
                 None
@@ -50,7 +50,7 @@ pub(super) fn draw_watch(frame: &mut Frame<'_>, app: &App, area: Rect) {
         }
         .render(inner, frame.buffer_mut());
 
-        if app.show_inspector {
+        if app.ui.show_inspector {
             draw_inspector(
                 frame,
                 watch_chunks[1],

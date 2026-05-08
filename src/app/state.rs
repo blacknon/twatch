@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 
 use super::config::AppConfig;
-use super::{App, AppHistoryMetadata, FilterMode, FocusPane, InputMode};
+use super::{App, AppHistoryMetadata, FilterMode, InputMode};
 use crate::cli::Cli;
 use crate::history::HistoryStore;
 use crate::runner::FrameSource;
@@ -16,21 +16,8 @@ impl App {
             paused: false,
             child_paused: false,
             child_pause_supported: config.child_pause_supported,
-            show_history: false,
-            show_history_details: false,
-            show_help: false,
-            show_exit_confirm: false,
-            show_inspector: false,
             diff_only: false,
             diff_mode: config.diff_mode,
-            focus: FocusPane::Watch,
-            app_input_mode: false,
-            watch_scroll: 0,
-            horizontal_scroll: 0,
-            inspect_x: 0,
-            inspect_y: 0,
-            filter_query: String::new(),
-            status_message: None,
             selected_index: 0,
             follow_latest: true,
             input_mode: InputMode::Normal,
@@ -61,6 +48,7 @@ impl App {
             next_frame_seq: 1,
             trace: super::TraceState::new(),
             view: super::ViewState::new(),
+            ui: super::UiState::new(),
         };
 
         app.load_history_from_log()?;

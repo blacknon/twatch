@@ -47,10 +47,10 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
     history::draw_history_overlay(frame, app, chunks[2]);
     history::draw_history_details(frame, app, area);
 
-    if app.show_help {
+    if app.ui.show_help {
         dialogs::draw_help(frame, area);
     }
-    if app.show_exit_confirm {
+    if app.ui.show_exit_confirm {
         dialogs::draw_exit_confirm(frame, area);
     }
 }

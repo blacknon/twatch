@@ -66,7 +66,7 @@ pub(super) fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect)
     );
 
     let filter_label = if app.is_search_mode() {
-        if app.filter_query.is_empty() {
+        if app.ui.filter_query.is_empty() {
             format!(
                 "Filter: {}",
                 match app.filter_mode() {
@@ -81,10 +81,10 @@ pub(super) fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect)
                     FilterMode::Plain => "/",
                     FilterMode::Regex => "*",
                 },
-                app.filter_query
+                app.ui.filter_query
             )
         }
-    } else if app.filter_query.is_empty() {
+    } else if app.ui.filter_query.is_empty() {
         "Filter".to_string()
     } else {
         format!(
@@ -93,15 +93,15 @@ pub(super) fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect)
                 FilterMode::Plain => "/",
                 FilterMode::Regex => "*",
             },
-            app.filter_query
+            app.ui.filter_query
         )
     };
-    let input_hint_long = if app.app_input_mode {
+    let input_hint_long = if app.ui.app_input_mode {
         " | Input: app mode, Ctrl-g to return"
     } else {
         " | Input: press i to control app"
     };
-    let input_hint_short = if app.app_input_mode {
+    let input_hint_short = if app.ui.app_input_mode {
         " | Ctrl-g to return"
     } else {
         " | i to control app"
@@ -111,10 +111,10 @@ pub(super) fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect)
         "Hist {}/{} {} {}",
         format!("{:05}", app.filtered_indices().len()),
         format!("{:05}", app.visible_history_len()),
-        if app.show_history { "Open" } else { "Close" },
+        if app.ui.show_history { "Open" } else { "Close" },
         if app.follow_latest { "Latest" } else { "Hold" }
     );
-    let input_label = if app.app_input_mode {
+    let input_label = if app.ui.app_input_mode {
         "Input On".to_string()
     } else {
         "Input Off".to_string()
@@ -148,7 +148,8 @@ pub(super) fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect)
         &filter_label,
         input_hint_long,
         input_hint_short,
-        app.status_message
+        app.ui
+            .status_message
             .as_deref()
             .or(resize_summary.as_deref())
             .or_else(|| app.selected_input_summary()),
@@ -157,7 +158,7 @@ pub(super) fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect)
     let left = Line::from(vec![Span::styled(
         format!(" {}", left_text),
         Style::default()
-            .fg(if app.filter_query.is_empty() && !app.is_search_mode() {
+            .fg(if app.ui.filter_query.is_empty() && !app.is_search_mode() {
                 Color::Indexed(246)
             } else {
                 COMMAND_ACCENT

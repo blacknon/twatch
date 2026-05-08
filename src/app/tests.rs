@@ -109,7 +109,7 @@ fn regex_filter_stops_following_latest_when_new_frame_does_not_match() {
     app.capture(20, 5).unwrap();
     app.capture(20, 5).unwrap();
     app.filter_mode = FilterMode::Regex;
-    app.filter_query = "worker-01".to_string();
+    app.ui.filter_query = "worker-01".to_string();
     app.rebuild_filter().unwrap();
 
     assert!(!app.follow_latest);
@@ -130,7 +130,7 @@ fn plain_filter_stops_following_latest_when_new_frame_does_not_match() {
 
     app.capture(20, 5).unwrap();
     app.filter_mode = FilterMode::Plain;
-    app.filter_query = "worker-01".to_string();
+    app.ui.filter_query = "worker-01".to_string();
     app.rebuild_filter().unwrap();
 
     assert!(app.follow_latest);
@@ -152,13 +152,13 @@ fn escape_does_not_clear_committed_filter_in_normal_mode() {
 
     app.capture(20, 5).unwrap();
     app.filter_mode = FilterMode::Plain;
-    app.filter_query = "worker-01".to_string();
+    app.ui.filter_query = "worker-01".to_string();
     app.rebuild_filter().unwrap();
 
     app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
         .unwrap();
 
-    assert_eq!(app.filter_query, "worker-01");
+    assert_eq!(app.ui.filter_query, "worker-01");
     assert!(app.filtered.is_empty());
     assert!(app.follow_latest);
 }
@@ -173,15 +173,15 @@ fn ctrl_c_clears_committed_filter_in_normal_mode() {
 
     app.capture(20, 5).unwrap();
     app.filter_mode = FilterMode::Plain;
-    app.filter_query = "worker-01".to_string();
+    app.ui.filter_query = "worker-01".to_string();
     app.rebuild_filter().unwrap();
 
     app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
         .unwrap();
 
-    assert!(app.filter_query.is_empty());
+    assert!(app.ui.filter_query.is_empty());
     assert!(app.follow_latest);
-    assert!(!app.show_exit_confirm);
+    assert!(!app.ui.show_exit_confirm);
 }
 
 #[test]
@@ -195,7 +195,7 @@ fn ctrl_c_opens_exit_when_filter_is_empty() {
     app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
         .unwrap();
 
-    assert!(app.show_exit_confirm);
+    assert!(app.ui.show_exit_confirm);
 }
 
 #[test]
@@ -266,7 +266,7 @@ fn delete_selected_history_removes_entry() {
     app.capture(20, 5).unwrap();
     app.capture(20, 5).unwrap();
     app.capture(20, 5).unwrap();
-    app.focus = FocusPane::History;
+    app.ui.focus = FocusPane::History;
     app.follow_latest = false;
     app.selected_index = 0;
     app.rebuild_filter().unwrap();
@@ -293,7 +293,7 @@ fn clear_history_except_selected_keeps_only_target() {
     app.capture(20, 5).unwrap();
     app.capture(20, 5).unwrap();
     app.capture(20, 5).unwrap();
-    app.focus = FocusPane::History;
+    app.ui.focus = FocusPane::History;
     app.follow_latest = false;
     app.selected_index = 1;
     app.rebuild_filter().unwrap();
@@ -407,7 +407,7 @@ fn inspector_toggles_and_moves() {
     app.capture(20, 5).unwrap();
     app.handle_key_event(KeyEvent::new(KeyCode::Char('I'), KeyModifiers::SHIFT))
         .unwrap();
-    assert!(app.show_inspector);
+    assert!(app.ui.show_inspector);
 
     app.handle_key_event(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT))
         .unwrap();
@@ -426,13 +426,13 @@ fn shift_s_toggles_history_details_and_opens_history() {
     app.handle_key_event(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT))
         .unwrap();
 
-    assert!(app.show_history);
-    assert!(app.show_history_details);
-    assert_eq!(app.focus, FocusPane::History);
+    assert!(app.ui.show_history);
+    assert!(app.ui.show_history_details);
+    assert_eq!(app.ui.focus, FocusPane::History);
 
     app.handle_key_event(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT))
         .unwrap();
-    assert!(!app.show_history_details);
+    assert!(!app.ui.show_history_details);
 }
 
 #[test]
@@ -443,15 +443,15 @@ fn closing_history_hides_history_details() {
     )
     .unwrap();
 
-    app.show_history = true;
-    app.show_history_details = true;
-    app.focus = FocusPane::History;
+    app.ui.show_history = true;
+    app.ui.show_history_details = true;
+    app.ui.focus = FocusPane::History;
 
     app.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
         .unwrap();
 
-    assert!(!app.show_history);
-    assert!(!app.show_history_details);
+    assert!(!app.ui.show_history);
+    assert!(!app.ui.show_history_details);
 }
 
 #[test]
@@ -556,7 +556,8 @@ fn shift_p_toggles_child_process_pause() {
         .unwrap();
     assert!(app.child_paused);
     assert!(
-        app.status_message
+        app.ui
+            .status_message
             .as_deref()
             .unwrap_or("")
             .contains("child process paused")
@@ -725,7 +726,13 @@ fn save_snapshot_uses_configured_directory_and_format() {
     let path = dir.join("twatch-snap.svg");
     let content = fs::read_to_string(&path).unwrap();
     assert!(content.starts_with("<svg"));
-    assert!(app.status_message.as_deref().unwrap_or("").contains(".svg"));
+    assert!(
+        app.ui
+            .status_message
+            .as_deref()
+            .unwrap_or("")
+            .contains(".svg")
+    );
 
     let _ = fs::remove_file(path);
     let _ = fs::remove_dir_all(dir);
@@ -742,7 +749,8 @@ fn cycle_screenshot_format_toggles_and_updates_status() {
     app.cycle_screenshot_format();
     assert_eq!(app.screenshot_format.label(), "svg");
     assert!(
-        app.status_message
+        app.ui
+            .status_message
             .as_deref()
             .unwrap_or("")
             .contains("snapshot format: svg")

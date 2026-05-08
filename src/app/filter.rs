@@ -10,7 +10,7 @@ impl App {
         self.filtered.retain(|index| *index >= visible_start);
         self.filtered.reverse();
 
-        if self.filter_query.is_empty() {
+        if self.ui.filter_query.is_empty() {
             if self.filtered.is_empty() {
                 self.follow_latest = true;
             } else if !self.follow_latest && !self.filtered.contains(&self.selected_index) {
@@ -32,15 +32,15 @@ impl App {
 
     fn find_filtered_history(&mut self) -> Result<Vec<usize>> {
         match self.filter_mode {
-            FilterMode::Plain => self.history.find_by_query(&self.filter_query),
+            FilterMode::Plain => self.history.find_by_query(&self.ui.filter_query),
             FilterMode::Regex => {
-                if self.filter_query.is_empty() {
+                if self.ui.filter_query.is_empty() {
                     Ok((0..self.history.len()).collect())
                 } else {
-                    match Regex::new(&self.filter_query) {
+                    match Regex::new(&self.ui.filter_query) {
                         Ok(regex) => self.history.find_by_regex(&regex),
                         Err(err) => {
-                            self.status_message = Some(format!("regex error: {err}"));
+                            self.ui.status_message = Some(format!("regex error: {err}"));
                             Ok(Vec::new())
                         }
                     }
@@ -57,12 +57,12 @@ impl App {
 
         match self.filter_mode {
             FilterMode::Plain => {
-                let needle = self.filter_query.to_lowercase();
+                let needle = self.ui.filter_query.to_lowercase();
                 lines
                     .iter()
                     .any(|line| line.to_lowercase().contains(&needle))
             }
-            FilterMode::Regex => Regex::new(&self.filter_query)
+            FilterMode::Regex => Regex::new(&self.ui.filter_query)
                 .ok()
                 .is_some_and(|regex| lines.iter().any(|line| regex.is_match(line))),
         }

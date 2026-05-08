@@ -51,7 +51,7 @@ impl App {
         ];
         save_snapshot(snapshot, &path, self.screenshot_format, &header)?;
         self.snapshot_trigger_fired = true;
-        self.status_message = Some(format!(
+        self.ui.status_message = Some(format!(
             "snapshot trigger saved: {} ({})",
             display_tmp_path(&path),
             self.screenshot_format.label()
@@ -79,7 +79,7 @@ impl App {
         })?;
 
         if let Some(reason) = result {
-            self.status_message = Some(format!("aftercommand: {reason}"));
+            self.ui.status_message = Some(format!("aftercommand: {reason}"));
         }
         Ok(())
     }

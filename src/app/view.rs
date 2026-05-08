@@ -3,7 +3,7 @@ use crate::screen::ScreenSnapshot;
 
 impl App {
     pub(crate) fn history_overlay_width(&self) -> u16 {
-        if self.show_history { 36 } else { 2 }
+        if self.ui.show_history { 36 } else { 2 }
     }
 
     pub fn visible_history_len(&self) -> usize {
@@ -64,7 +64,7 @@ impl App {
     }
 
     pub fn inspect_cursor(&self) -> (u16, u16) {
-        (self.inspect_x, self.inspect_y)
+        (self.ui.inspect_x, self.ui.inspect_y)
     }
 
     pub fn selected_resize_summary(&self) -> Option<String> {

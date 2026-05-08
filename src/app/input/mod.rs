@@ -15,7 +15,7 @@ impl App {
         match self.source.toggle_child_pause()? {
             Some(paused) => {
                 self.child_paused = paused;
-                self.status_message = Some(if paused {
+                self.ui.status_message = Some(if paused {
                     "child process paused".to_string()
                 } else {
                     "child process resumed".to_string()
@@ -23,7 +23,7 @@ impl App {
             }
             None => {
                 self.child_paused = false;
-                self.status_message =
+                self.ui.status_message =
                     Some("child pause is not available for this source".to_string());
             }
         }
@@ -35,15 +35,15 @@ impl App {
             (KeyCode::Char(ch), _) if matches!(ch, 'y' | 'Y' | 'q' | 'Q') => Ok(true),
             (KeyCode::Enter, _) => Ok(true),
             (KeyCode::Esc, _) => {
-                self.show_exit_confirm = false;
+                self.ui.show_exit_confirm = false;
                 Ok(false)
             }
             (KeyCode::Char(ch), _) if matches!(ch, 'n' | 'N') => {
-                self.show_exit_confirm = false;
+                self.ui.show_exit_confirm = false;
                 Ok(false)
             }
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                self.show_exit_confirm = false;
+                self.ui.show_exit_confirm = false;
                 Ok(false)
             }
             _ => Ok(false),
@@ -61,11 +61,11 @@ impl App {
                 self.rebuild_filter()?;
             }
             KeyCode::Backspace => {
-                self.filter_query.pop();
+                self.ui.filter_query.pop();
                 self.rebuild_filter()?;
             }
             KeyCode::Char(ch) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.filter_query.push(ch);
+                self.ui.filter_query.push(ch);
                 self.rebuild_filter()?;
             }
             _ => {}
@@ -80,12 +80,12 @@ impl App {
 
     fn clear_filter(&mut self) -> Result<()> {
         self.input_mode = InputMode::Normal;
-        self.filter_query.clear();
+        self.ui.filter_query.clear();
         self.rebuild_filter()
     }
 
     fn toggle_focus(&mut self) {
-        self.focus = match self.focus {
+        self.ui.focus = match self.ui.focus {
             FocusPane::Watch => FocusPane::History,
             FocusPane::History => FocusPane::Watch,
         };
@@ -137,11 +137,11 @@ impl App {
 
     fn clamp_inspector_to_snapshot(&mut self) {
         let Some(snapshot) = self.selected_snapshot() else {
-            self.inspect_x = 0;
-            self.inspect_y = 0;
+            self.ui.inspect_x = 0;
+            self.ui.inspect_y = 0;
             return;
         };
-        self.inspect_x = self.inspect_x.min(snapshot.width().saturating_sub(1));
-        self.inspect_y = self.inspect_y.min(snapshot.height().saturating_sub(1));
+        self.ui.inspect_x = self.ui.inspect_x.min(snapshot.width().saturating_sub(1));
+        self.ui.inspect_y = self.ui.inspect_y.min(snapshot.height().saturating_sub(1));
     }
 }

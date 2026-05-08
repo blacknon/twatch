@@ -6,14 +6,14 @@ use crate::logging::{LogRecord, append_record, load_records};
 
 impl App {
     pub(super) fn delete_selected_history(&mut self) -> Result<()> {
-        if self.focus != FocusPane::History || self.follow_latest {
-            self.status_message = Some("delete works on selected history".to_string());
+        if self.ui.focus != FocusPane::History || self.follow_latest {
+            self.ui.status_message = Some("delete works on selected history".to_string());
             return Ok(());
         }
         let selected = self.selected_index;
         self.rebuild_history_retaining(|index| index != selected)?;
         self.follow_latest = true;
-        self.status_message = Some("history deleted".to_string());
+        self.ui.status_message = Some("history deleted".to_string());
         Ok(())
     }
 
@@ -21,7 +21,7 @@ impl App {
         if self.follow_latest {
             self.rebuild_history_retaining(|_| false)?;
             self.follow_latest = true;
-            self.status_message = Some("history cleared; latest kept".to_string());
+            self.ui.status_message = Some("history cleared; latest kept".to_string());
             return Ok(());
         }
 
@@ -33,7 +33,7 @@ impl App {
         } else {
             self.follow_latest = true;
         }
-        self.status_message = Some("history cleared except selected".to_string());
+        self.ui.status_message = Some("history cleared except selected".to_string());
         Ok(())
     }
 
