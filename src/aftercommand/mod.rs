@@ -1,13 +1,16 @@
-use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, SyncSender, TrySendError};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use regex::Regex;
 use serde::Serialize;
 
-use crate::cli::default_shell;
+mod rules;
+mod worker;
+
+use rules::evaluate_rules;
+use worker::{parse_shell, run_hook_with_timeout};
 
 #[derive(Clone, Debug)]
 pub struct AfterCommandConfig {
@@ -78,54 +81,16 @@ impl AfterCommandRuntime {
     }
 
     pub fn evaluate_and_enqueue(&mut self, event: AfterCommandEvent) -> Result<Option<String>> {
-        if !event.changed {
+        let matched_rules = evaluate_rules(
+            &self.config,
+            &event,
+            &mut self.changed_frame_count,
+            self.last_trigger_unix_ms,
+        );
+
+        let Some(matched_rules) = matched_rules else {
             return Ok(None);
-        }
-
-        self.changed_frame_count += 1;
-
-        if self
-            .config
-            .debounce_ms
-            .zip(self.last_trigger_unix_ms)
-            .is_some_and(|(debounce_ms, last_ms)| {
-                event.timestamp_unix_ms.saturating_sub(last_ms) < debounce_ms
-            })
-        {
-            return Ok(None);
-        }
-
-        let mut matched_rules = Vec::new();
-
-        if let Some(regex) = &self.config.regex
-            && regex.is_match(&event.output)
-        {
-            matched_rules.push(format!("regex:{}", regex.as_str()));
-        }
-
-        if let Some(threshold) = self.config.changed_cells
-            && event.changed_cell_count >= threshold
-        {
-            matched_rules.push(format!("changed-cells:{}", event.changed_cell_count));
-        }
-
-        if let Some(every) = self.config.every
-            && every > 0
-            && self.changed_frame_count % every == 0
-        {
-            matched_rules.push(format!("every:{every}"));
-        }
-
-        if self.config.regex.is_none()
-            && self.config.changed_cells.is_none()
-            && self.config.every.is_none()
-        {
-            matched_rules.push("changed".to_string());
-        }
-
-        if matched_rules.is_empty() {
-            return Ok(None);
-        }
+        };
 
         let payload = AfterCommandPayload {
             command: self.config.command_display.clone(),
@@ -151,54 +116,9 @@ impl AfterCommandRuntime {
     }
 }
 
-fn run_hook_with_timeout(
-    shell_program: &str,
-    shell_args: &[String],
-    hook: &str,
-    timeout: Duration,
-    payload: &AfterCommandPayload,
-) -> Result<()> {
-    let mut cmd = Command::new(shell_program);
-    cmd.args(shell_args)
-        .arg(hook)
-        .env(
-            "TWATCH_DATA",
-            serde_json::to_string(payload).context("failed to serialize aftercommand payload")?,
-        )
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-
-    let mut child = cmd.spawn().context("failed to spawn aftercommand hook")?;
-    let start = SystemTime::now();
-
-    loop {
-        if child.try_wait()?.is_some() {
-            return Ok(());
-        }
-        if start.elapsed().unwrap_or(Duration::ZERO) >= timeout {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Ok(());
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn parse_shell(shell: &str) -> (String, Vec<String>) {
-    match shell_words::split(shell) {
-        Ok(parts) if !parts.is_empty() => {
-            (parts[0].clone(), parts.iter().skip(1).cloned().collect())
-        }
-        _ => {
-            let parts = shell_words::split(&default_shell()).expect("default shell must parse");
-            (parts[0].clone(), parts.iter().skip(1).cloned().collect())
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{AfterCommandConfig, AfterCommandEvent, AfterCommandRuntime};
+    use super::{AfterCommandConfig, AfterCommandEvent, AfterCommandPayload, AfterCommandRuntime};
 
     fn runtime() -> AfterCommandRuntime {
         AfterCommandRuntime::new(AfterCommandConfig {
@@ -306,7 +226,7 @@ mod tests {
 
     #[test]
     fn payload_serializes_debug_fields() {
-        let payload = super::AfterCommandPayload {
+        let payload = AfterCommandPayload {
             command: "demo".to_string(),
             changed: true,
             output: "panic".to_string(),
