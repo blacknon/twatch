@@ -20,6 +20,7 @@ mod snapshot;
 mod state;
 #[cfg(test)]
 mod tests;
+mod view;
 
 enum AppEvent {
     Terminal(crossterm::event::Event),
