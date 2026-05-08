@@ -13,6 +13,7 @@ use crate::screenshot::ScreenshotFormat;
 use crossterm::event::{KeyCode, KeyModifiers, MouseButton, MouseEventKind};
 use regex::Regex;
 
+mod filter;
 mod history_ops;
 mod input;
 mod runtime;
