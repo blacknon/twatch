@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use crossterm::event::{KeyEvent, MouseEvent};
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 struct MockSource {
     frames: Vec<CaptureFrame>,
@@ -191,6 +191,59 @@ fn ctrl_c_opens_exit_when_filter_is_empty() {
         .unwrap();
 
     assert!(app.show_exit_confirm);
+}
+
+#[test]
+fn ignores_diff_ghost_key_immediately_after_mouse_scroll() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![frame("a", &["worker-01 ok"])])),
+    )
+    .unwrap();
+
+    app.last_mouse_scroll_input = Some(Instant::now());
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+        .unwrap();
+
+    assert_eq!(app.diff_mode, super::DiffMode::None);
+
+    app.last_mouse_scroll_input = Some(Instant::now());
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT))
+        .unwrap();
+
+    assert_eq!(app.diff_mode, super::DiffMode::None);
+}
+
+#[test]
+fn p_toggles_capture_pause_state() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![frame("a", &["worker-01 ok"])])),
+    )
+    .unwrap();
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.paused);
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE))
+        .unwrap();
+    assert!(!app.paused);
+}
+
+#[test]
+fn does_not_ignore_diff_key_after_scroll_guard_window() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![frame("a", &["worker-01 ok"])])),
+    )
+    .unwrap();
+
+    app.last_mouse_scroll_input = Some(Instant::now() - Duration::from_millis(300));
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+        .unwrap();
+
+    assert_eq!(app.diff_mode, super::DiffMode::Watch);
 }
 
 #[test]
@@ -657,6 +710,64 @@ fn cycle_screenshot_format_toggles_and_updates_status() {
 
     app.cycle_screenshot_format();
     assert_eq!(app.screenshot_format.label(), "text");
+}
+
+#[test]
+fn history_trimming_is_batched_after_limit_boundary() {
+    let mut cli = test_cli();
+    cli.limit = 5;
+    cli.checkpoint_interval = 2;
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(
+            (0..12).map(|i| frame(&format!("{i:04}"), &["x"])).collect(),
+        )),
+    )
+    .unwrap();
+
+    for _ in 0..7 {
+        app.capture(20, 5).unwrap();
+    }
+    assert_eq!(app.history_len(), 6);
+    assert_eq!(app.visible_history_len(), 5);
+    assert_eq!(app.filtered_indices().len(), 5);
+    assert_eq!(app.filtered_indices()[0], 5);
+
+    for _ in 7..12 {
+        app.capture(20, 5).unwrap();
+    }
+    assert_eq!(app.history_len(), 5);
+}
+
+#[test]
+fn selecting_oldest_visible_history_advances_to_next_oldest_when_window_shifts() {
+    let mut cli = test_cli();
+    cli.limit = 5;
+    cli.checkpoint_interval = 2;
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(
+            (0..8).map(|i| frame(&format!("{i:04}"), &["x"])).collect(),
+        )),
+    )
+    .unwrap();
+
+    for _ in 0..6 {
+        app.capture(20, 5).unwrap();
+    }
+
+    app.follow_latest = false;
+    app.selected_index = app.filtered_indices().last().copied().unwrap();
+    let previously_selected = app.selected_index;
+
+    app.capture(20, 5).unwrap();
+
+    assert!(!app.follow_latest);
+    assert_eq!(previously_selected + 1, app.selected_index);
+    assert_eq!(
+        app.filtered_indices().last().copied().unwrap(),
+        app.selected_index
+    );
 }
 
 fn test_cli() -> Cli {

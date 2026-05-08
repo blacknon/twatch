@@ -92,12 +92,14 @@ impl App {
             source,
             last_tick: Instant::now(),
             last_mouse_input: None,
+            last_mouse_scroll_input: None,
             next_frame_seq: 1,
             input_trace: std::collections::VecDeque::with_capacity(256),
             pending_input_events: Vec::new(),
             next_input_seq: 1,
             resize_trace: std::collections::VecDeque::with_capacity(64),
             pending_resize_event: None,
+            view_cache: std::cell::RefCell::new(None),
         };
 
         app.load_history_from_log()?;
@@ -106,6 +108,10 @@ impl App {
 
     pub fn history_len(&self) -> usize {
         self.metadata.len()
+    }
+
+    pub fn visible_history_len(&self) -> usize {
+        self.history_len().min(self.limit)
     }
 
     pub fn is_event_driven(&self) -> bool {
@@ -148,6 +154,18 @@ impl App {
         } else {
             self.metadata.get(self.selected_index)
         }
+    }
+
+    pub(super) fn trim_slack(&self) -> usize {
+        self.limit.min(self.checkpoint_interval.max(32))
+    }
+
+    pub(super) fn trim_trigger_len(&self) -> usize {
+        self.limit.saturating_add(self.trim_slack())
+    }
+
+    pub(super) fn visible_history_start(&self) -> usize {
+        self.history_len().saturating_sub(self.limit)
     }
 
     pub fn selected_input_summary(&self) -> Option<&str> {

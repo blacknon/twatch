@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -169,6 +170,21 @@ struct ResizeTraceEvent {
     source: &'static str,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ViewCacheKey {
+    follow_latest: bool,
+    selected_index: usize,
+    history_len: usize,
+    current_frame_seq: u64,
+}
+
+#[derive(Clone, Debug)]
+struct ViewCache {
+    key: ViewCacheKey,
+    selected: Option<ScreenSnapshot>,
+    previous: Option<ScreenSnapshot>,
+}
+
 impl InputTraceEvent {
     fn summary(&self) -> String {
         match &self.kind {
@@ -229,12 +245,14 @@ pub struct App {
     source: Box<dyn FrameSource>,
     last_tick: Instant,
     last_mouse_input: Option<Instant>,
+    last_mouse_scroll_input: Option<Instant>,
     next_frame_seq: u64,
     input_trace: VecDeque<InputTraceEvent>,
     pending_input_events: Vec<InputTraceEvent>,
     next_input_seq: u64,
     resize_trace: VecDeque<ResizeTraceEvent>,
     pending_resize_event: Option<ResizeTraceEvent>,
+    view_cache: RefCell<Option<ViewCache>>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

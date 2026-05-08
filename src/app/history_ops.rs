@@ -8,12 +8,18 @@ use crate::logging::{LogRecord, append_record, load_records};
 impl App {
     pub(super) fn rebuild_filter(&mut self) -> Result<()> {
         self.filtered = self.find_filtered_history()?;
+        let visible_start = self.visible_history_start();
+        self.filtered.retain(|index| *index >= visible_start);
         self.filtered.reverse();
         if self.filter_query.is_empty() {
             if self.filtered.is_empty() {
                 self.follow_latest = true;
             } else if !self.follow_latest && !self.filtered.contains(&self.selected_index) {
-                self.selected_index = *self.filtered.first().unwrap_or(&0);
+                self.selected_index = if self.selected_index < visible_start {
+                    *self.filtered.last().unwrap_or(&0)
+                } else {
+                    *self.filtered.first().unwrap_or(&0)
+                };
             }
             return Ok(());
         }
@@ -24,7 +30,11 @@ impl App {
                 self.follow_latest = false;
             }
         } else if !self.follow_latest && !self.filtered.contains(&self.selected_index) {
-            self.selected_index = *self.filtered.first().unwrap_or(&0);
+            self.selected_index = if self.selected_index < visible_start {
+                *self.filtered.last().unwrap_or(&0)
+            } else {
+                *self.filtered.first().unwrap_or(&0)
+            };
         }
         Ok(())
     }
@@ -119,6 +129,7 @@ impl App {
 
         self.history = rebuilt;
         self.metadata = rebuilt_meta;
+        self.invalidate_view_cache();
         self.selected_index = self.history.len().saturating_sub(1);
         self.rebuild_filter()?;
         Ok(())
@@ -144,6 +155,7 @@ impl App {
 
         self.history = rebuilt;
         self.metadata = rebuilt_meta;
+        self.invalidate_view_cache();
         if self.history.is_empty() {
             self.follow_latest = true;
             self.selected_index = 0;

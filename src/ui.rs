@@ -154,7 +154,7 @@ fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let hist_label = format!(
         "Hist {}/{} {} {}",
         format!("{:05}", app.filtered_indices().len()),
-        format!("{:05}", app.history_len()),
+        format!("{:05}", app.visible_history_len()),
         if app.show_history { "Open" } else { "Close" },
         if app.follow_latest { "Latest" } else { "Hold" }
     );
@@ -162,6 +162,11 @@ fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect) {
         "Input On".to_string()
     } else {
         "Input Off".to_string()
+    };
+    let capture_label = if app.paused {
+        "Capture Pause".to_string()
+    } else {
+        "Capture Run".to_string()
     };
     let child_label = if !app.child_pause_supported {
         "Child N/A".to_string()
@@ -174,6 +179,8 @@ fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let right_width = badge_width(&hist_label)
         + 1
         + badge_width(&input_label)
+        + 1
+        + badge_width(&capture_label)
         + 1
         + badge_width(&child_label)
         + 1
@@ -206,6 +213,16 @@ fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect) {
         status_badge(hist_label, BADGE_CYAN, true),
         gap(HEADER_SUB_BG),
         status_badge(input_label, BADGE_GREEN, true),
+        gap(HEADER_SUB_BG),
+        status_badge(
+            capture_label,
+            if app.paused {
+                BADGE_MAGENTA
+            } else {
+                BADGE_GREEN
+            },
+            true,
+        ),
         gap(HEADER_SUB_BG),
         status_badge(
             child_label,

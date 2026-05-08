@@ -238,6 +238,7 @@ impl App {
 
         match mouse.kind {
             MouseEventKind::ScrollDown => {
+                self.last_mouse_scroll_input = Some(Instant::now());
                 if over_history {
                     self.focus = FocusPane::History;
                     self.move_down();
@@ -250,6 +251,7 @@ impl App {
                 }
             }
             MouseEventKind::ScrollUp => {
+                self.last_mouse_scroll_input = Some(Instant::now());
                 if over_history {
                     self.focus = FocusPane::History;
                     self.move_up();
@@ -334,16 +336,17 @@ impl App {
     }
 
     fn should_ignore_mouse_ghost_key(&self, key: KeyEvent) -> bool {
-        let Some(last_mouse_input) = self.last_mouse_input else {
+        let Some(last_mouse_scroll_input) = self.last_mouse_scroll_input else {
             return false;
         };
-        if last_mouse_input.elapsed() > Duration::from_millis(150) {
+        if last_mouse_scroll_input.elapsed() > Duration::from_millis(250) {
             return false;
         }
 
         matches!(
             (key.code, key.modifiers),
             (KeyCode::Char('d'), KeyModifiers::NONE)
+                | (KeyCode::Char('D'), KeyModifiers::SHIFT)
                 | (KeyCode::Char('0'), KeyModifiers::NONE)
                 | (KeyCode::Char('1'), KeyModifiers::NONE)
         )
@@ -462,6 +465,7 @@ impl App {
         );
         self.selected_index = self.filtered[next];
         self.sync_follow_latest_with_selection();
+        self.invalidate_view_cache();
     }
 
     pub(super) fn select_history_row(&mut self, row: usize) {
@@ -470,6 +474,7 @@ impl App {
             if let Some(latest) = self.filtered.first().copied() {
                 self.selected_index = latest;
             }
+            self.invalidate_view_cache();
             return;
         }
 
@@ -477,6 +482,7 @@ impl App {
             self.follow_latest = false;
             self.selected_index = index;
             self.sync_follow_latest_with_selection();
+            self.invalidate_view_cache();
         }
     }
 
