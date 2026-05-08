@@ -16,6 +16,7 @@ struct MockSource {
     next: usize,
     child_pause_supported: bool,
     child_paused: bool,
+    key_events: Arc<Mutex<Vec<KeyEvent>>>,
     mouse_events: Arc<Mutex<Vec<MouseEvent>>>,
 }
 
@@ -26,6 +27,7 @@ impl MockSource {
             next: 0,
             child_pause_supported: false,
             child_paused: false,
+            key_events: Arc::new(Mutex::new(Vec::new())),
             mouse_events: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -36,6 +38,7 @@ impl MockSource {
             next: 0,
             child_pause_supported: true,
             child_paused: false,
+            key_events: Arc::new(Mutex::new(Vec::new())),
             mouse_events: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -57,7 +60,8 @@ impl FrameSource for MockSource {
         Ok(())
     }
 
-    fn send_key(&mut self, _key: KeyEvent) -> Result<()> {
+    fn send_key(&mut self, key: KeyEvent) -> Result<()> {
+        self.key_events.lock().unwrap().push(key);
         Ok(())
     }
 
@@ -542,6 +546,50 @@ fn mouse_passthrough_is_allowed_when_following_latest() {
     .unwrap();
 
     assert_eq!(mouse_events.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn key_passthrough_is_blocked_when_not_following_latest() {
+    let source = MockSource::new(vec![frame("a", &["one"])]);
+    let key_events = source.key_events.clone();
+    let mut app = App::new(&test_cli(), Box::new(source)).unwrap();
+
+    app.follow_latest = false;
+    app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+        .unwrap();
+
+    assert!(key_events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn key_passthrough_is_allowed_when_following_latest() {
+    let source = MockSource::new(vec![frame("a", &["one"])]);
+    let key_events = source.key_events.clone();
+    let mut app = App::new(&test_cli(), Box::new(source)).unwrap();
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+        .unwrap();
+
+    assert_eq!(key_events.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn app_input_mode_is_available_only_on_latest() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![frame("a", &["one"])])),
+    )
+    .unwrap();
+
+    app.follow_latest = false;
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE))
+        .unwrap();
+
+    assert!(!app.ui.app_input_mode);
+    assert_eq!(
+        app.ui.status_message.as_deref(),
+        Some("app input mode is available only on latest")
+    );
 }
 
 #[test]

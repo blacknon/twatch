@@ -31,6 +31,9 @@ impl App {
         }
 
         if self.ui.app_input_mode {
+            if !self.follow_latest {
+                return Ok(false);
+            }
             if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
                 self.ui.app_input_mode = false;
                 return Ok(false);
@@ -40,7 +43,10 @@ impl App {
             return Ok(false);
         }
 
-        if self.ui.focus == FocusPane::Watch && self.should_passthrough_to_app(key) {
+        if self.follow_latest
+            && self.ui.focus == FocusPane::Watch
+            && self.should_passthrough_to_app(key)
+        {
             self.record_child_key_event(key);
             self.source.send_key(key)?;
             return Ok(false);
@@ -85,8 +91,11 @@ impl App {
                 self.clamp_inspector_to_snapshot();
             }
             (KeyCode::Char('i'), _) => {
-                if self.ui.focus == FocusPane::Watch {
+                if self.ui.focus == FocusPane::Watch && self.follow_latest {
                     self.ui.app_input_mode = true;
+                } else if self.ui.focus == FocusPane::Watch {
+                    self.ui.status_message =
+                        Some("app input mode is available only on latest".to_string());
                 }
             }
             (KeyCode::Tab, _) => self.toggle_focus(),
