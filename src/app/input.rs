@@ -233,6 +233,7 @@ impl App {
             .unwrap_or(0);
         let over_history =
             self.show_history && mouse.column >= self.history_overlay_start(total_width);
+        let history_content_top = self.history_content_top();
         let previous_focus = self.focus;
 
         match mouse.kind {
@@ -263,8 +264,11 @@ impl App {
             MouseEventKind::Down(_) => {
                 if over_history {
                     self.focus = FocusPane::History;
+                    if mouse.row < history_content_top {
+                        return Ok(true);
+                    }
                     self.select_history_overlay_row(
-                        usize::from(mouse.row.saturating_sub(2)),
+                        usize::from(mouse.row.saturating_sub(history_content_top)),
                         self.history_visible_rows(),
                     );
                     return Ok(true);
@@ -296,8 +300,12 @@ impl App {
 
     fn history_visible_rows(&self) -> usize {
         crossterm::terminal::size()
-            .map(|(_, height)| usize::from(height.saturating_sub(3)))
+            .map(|(_, height)| usize::from(height.saturating_sub(4)))
             .unwrap_or(0)
+    }
+
+    fn history_content_top(&self) -> u16 {
+        3
     }
 
     fn start_search(&mut self, mode: super::FilterMode) {

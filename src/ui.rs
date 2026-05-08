@@ -384,7 +384,7 @@ fn draw_history_overlay(frame: &mut Frame<'_>, app: &App, area: Rect) {
     } else {
         " history "
     };
-    let visible_rows = usize::from(overlay.height.saturating_sub(1));
+    let visible_rows = usize::from(overlay.height.saturating_sub(2));
     let (start, end) = app.history_overlay_window(visible_rows);
 
     let mut items: Vec<ListItem<'_>> = Vec::with_capacity(end.saturating_sub(start));
