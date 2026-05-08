@@ -8,6 +8,7 @@ use time::{OffsetDateTime, format_description::FormatItem, macros::format_descri
 use crate::logging::load_records;
 use crate::screen::ScreenSnapshot;
 
+mod capture_hook;
 mod encode;
 mod pty;
 
@@ -202,7 +203,7 @@ pub(crate) fn unix_timestamp_millis() -> u64 {
 mod tests {
     use super::{DemoRunner, FrameSource, ReplayRunner};
     use crate::logging::{LogRecord, append_record};
-    use crate::runner::pty::parse_shell;
+    use crate::runner::capture_hook::parse_shell;
     use crate::screen::ScreenSnapshot;
 
     #[test]

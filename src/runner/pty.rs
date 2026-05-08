@@ -3,15 +3,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use crossterm::event::{KeyEvent, MouseEvent};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use serde::Serialize;
 
-use crate::cli::default_shell;
 use crate::process_control;
+use crate::runner::capture_hook::CaptureHook;
 use crate::runner::encode::{key_to_bytes, mouse_to_bytes};
 use crate::runner::{CaptureFrame, FrameSource, SourceEvent, time_label, unix_timestamp_millis};
 use crate::screen::{Cell, ScreenSnapshot, Style, TermColor};
@@ -24,10 +22,7 @@ pub struct PtyRunner {
     child: Box<dyn Child + Send + Sync>,
     state: Arc<RwLock<TerminalState>>,
     dirty: Arc<AtomicBool>,
-    shell_program: String,
-    shell_args: Vec<String>,
-    command: String,
-    aftercommand: Option<String>,
+    capture_hook: Option<CaptureHook>,
     last_snapshot: Option<ScreenSnapshot>,
     last_size: (u16, u16),
     child_paused: bool,
@@ -73,18 +68,13 @@ impl PtyRunner {
         let (update_tx, update_rx) = mpsc::sync_channel(2);
         start_reader_thread(state.clone(), dirty.clone(), reader, update_tx);
 
-        let (shell_program, shell_args) = parse_shell(shell);
-
         Ok(Self {
             master: pair.master,
             writer: Arc::new(Mutex::new(writer)),
             child,
             state,
             dirty,
-            shell_program,
-            shell_args,
-            command,
-            aftercommand,
+            capture_hook: aftercommand.map(|hook| CaptureHook::new(shell, command.clone(), hook)),
             last_snapshot: None,
             last_size: (width.max(1), height.max(1)),
             child_paused: false,
@@ -134,36 +124,9 @@ impl PtyRunner {
     }
 
     fn maybe_run_aftercommand(&self, output: &str, changed: bool) -> Result<()> {
-        if !changed {
-            return Ok(());
-        }
-
-        let Some(aftercommand) = &self.aftercommand else {
-            return Ok(());
-        };
-
-        let payload = AfterCommandPayload {
-            command: self.command.clone(),
-            changed,
-            output: output.to_string(),
-            unix_timestamp: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or(Duration::ZERO)
-                .as_secs(),
-        };
-
-        let mut cmd = std::process::Command::new(&self.shell_program);
-        cmd.args(&self.shell_args)
-            .arg(aftercommand)
-            .env(
-                "TWATCH_DATA",
-                serde_json::to_string(&payload)
-                    .context("failed to serialize aftercommand payload")?,
-            )
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        let _ = cmd.status();
-        Ok(())
+        self.capture_hook
+            .as_ref()
+            .map_or(Ok(()), |hook| hook.maybe_run(output, changed))
     }
 }
 
@@ -281,14 +244,6 @@ impl FrameSource for PtyRunner {
     }
 }
 
-#[derive(Serialize)]
-struct AfterCommandPayload {
-    command: String,
-    changed: bool,
-    output: String,
-    unix_timestamp: u64,
-}
-
 fn start_reader_thread(
     state: Arc<RwLock<TerminalState>>,
     dirty: Arc<AtomicBool>,
@@ -346,18 +301,6 @@ fn build_command(shell: &str, command: &str) -> Result<CommandBuilder> {
         builder.arg(command);
     }
     Ok(builder)
-}
-
-pub(crate) fn parse_shell(shell: &str) -> (String, Vec<String>) {
-    match shell_words::split(shell) {
-        Ok(parts) if !parts.is_empty() => {
-            (parts[0].clone(), parts.iter().skip(1).cloned().collect())
-        }
-        _ => {
-            let parts = shell_words::split(&default_shell()).expect("default shell must parse");
-            (parts[0].clone(), parts.iter().skip(1).cloned().collect())
-        }
-    }
 }
 
 fn map_color(color: vt100::Color) -> TermColor {
