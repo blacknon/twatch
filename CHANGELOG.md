@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.2
+
+- Add replay mode for saved JSONL traces with read-only history browsing
+- Add frame metadata for timestamps, sequence numbers, changed-cell counts, input summaries, and resize traces
+- Add cell inspector, automatic snapshot triggers, and conditional asynchronous `aftercommand` triggers for TUI debugging
+- Add child process pause/resume on `Shift+P` in addition to capture pause on `p`
+- Improve long-running history behavior with batched trimming, cached snapshot lookup, update coalescing, and lighter history rendering
+- Restrict mouse passthrough to `latest` view and refine history overlay sizing and selection behavior
+- Split large `app`, `ui`, `runner`, and `aftercommand` modules into smaller units without changing core behavior
+- Refresh README and in-app help text to match the current keybindings and debug-oriented workflow
+
+This release turns `twatch` into a much stronger debugging tool for terminal UIs.
+It expands traceability and replay features, improves responsiveness for longer sessions, and tightens the interaction model around history browsing and child control.
+
 ## 0.1.1
 
 - Fix child TUI exit handling so `twatch` can stop cleanly after the wrapped PTY closes
