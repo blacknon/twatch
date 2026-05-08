@@ -1,57 +1,68 @@
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use super::{App, AppHistoryMetadata, FilterMode, FocusPane, InputMode};
+use super::config::AppConfig;
+use super::{App, AppHistoryMetadata, FilterMode, InputMode};
 use crate::cli::Cli;
 use crate::history::HistoryStore;
 use crate::runner::FrameSource;
 
 impl App {
     pub fn new(cli: &Cli, source: Box<dyn FrameSource>) -> Result<Self> {
+        let config = AppConfig::from_cli(cli, source.supports_child_pause())?;
         let mut app = Self {
-            interval_secs: cli.interval,
+            interval_secs: config.interval_secs,
             paused: false,
-            show_history: false,
-            show_help: false,
-            show_exit_confirm: false,
+            child_paused: false,
+            child_pause_supported: config.child_pause_supported,
             diff_only: false,
-            diff_mode: cli.differences.into(),
-            focus: FocusPane::Watch,
-            app_input_mode: false,
-            watch_scroll: 0,
-            horizontal_scroll: 0,
-            filter_query: String::new(),
-            status_message: None,
+            diff_mode: config.diff_mode,
             selected_index: 0,
             follow_latest: true,
             input_mode: InputMode::Normal,
             filter_mode: FilterMode::Plain,
             current_snapshot: None,
-            current_label: None,
-            current_changed: false,
-            history: HistoryStore::new(cli.checkpoint_interval, cli.compress),
+            current_metadata: None,
+            history: HistoryStore::new(config.checkpoint_interval, config.compress),
             metadata: Vec::new(),
             filtered: Vec::new(),
-            limit: cli.limit.max(1),
-            checkpoint_interval: cli.checkpoint_interval.max(1),
-            compress: cli.compress,
-            logfile: cli.logfile.clone(),
-            screenshot_dir: PathBuf::from(&cli.screenshot_dir),
-            screenshot_format: cli.screenshot_format.into(),
-            command_display: if cli.command.is_empty() {
-                "demo".to_string()
-            } else {
-                cli.command.join(" ")
-            },
+            limit: config.history_limit,
+            checkpoint_interval: config.checkpoint_interval,
+            compress: config.compress,
+            logfile: config.logfile,
+            replay_mode: config.replay_mode,
+            screenshot_dir: config.screenshot_dir,
+            screenshot_format: config.screenshot_format,
+            snapshot_on: config.snapshot_on,
+            snapshot_on_regex: config.snapshot_on_regex,
+            snapshot_on_change_cells: config.snapshot_on_change_cells,
+            snapshot_once: config.snapshot_once,
+            snapshot_trigger_fired: false,
+            aftercommand_runtime: config.aftercommand_runtime,
+            command_display: config.command_display,
             source,
             last_tick: Instant::now(),
             last_mouse_input: None,
+            last_mouse_scroll_input: None,
+            next_frame_seq: 1,
+            trace: super::TraceState::new(),
+            view: super::ViewState::new(),
+            ui: super::UiState::new(),
         };
 
         app.load_history_from_log()?;
         Ok(app)
+    }
+
+    pub(super) fn command_display_from_cli(cli: &Cli) -> String {
+        if let Some(path) = &cli.replay {
+            format!("replay: {path}")
+        } else if cli.command.is_empty() {
+            "demo".to_string()
+        } else {
+            cli.command.join(" ")
+        }
     }
 
     pub fn history_len(&self) -> usize {
@@ -75,7 +86,9 @@ impl App {
     }
 
     pub fn current_label(&self) -> Option<&str> {
-        self.current_label.as_deref()
+        self.current_metadata
+            .as_ref()
+            .map(|metadata| metadata.label.as_str())
     }
 
     pub fn is_search_mode(&self) -> bool {
@@ -90,20 +103,12 @@ impl App {
         &self.metadata[index]
     }
 
-    pub fn selected_filtered_position(&self) -> Option<usize> {
-        self.filtered
-            .iter()
-            .position(|idx| *idx == self.selected_index)
+    pub(super) fn trim_slack(&self) -> usize {
+        self.limit.min(self.checkpoint_interval.max(32))
     }
 
-    pub fn selected_history_row(&self) -> usize {
-        if self.follow_latest {
-            0
-        } else {
-            self.selected_filtered_position()
-                .map(|position| position + 1)
-                .unwrap_or(0)
-        }
+    pub(super) fn trim_trigger_len(&self) -> usize {
+        self.limit.saturating_add(self.trim_slack())
     }
 
     pub(super) fn tick_timeout(&self) -> Duration {

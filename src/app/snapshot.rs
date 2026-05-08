@@ -4,50 +4,15 @@ use std::time::Instant;
 use anyhow::Result;
 
 use super::{App, FilterMode};
-use crate::history::HistoryMetadata;
 use crate::runner::CaptureFrame;
 use crate::screen::ScreenSnapshot;
 use crate::screenshot::save_snapshot;
 
 impl App {
-    pub fn selected_snapshot(&self) -> Option<ScreenSnapshot> {
-        if self.follow_latest {
-            self.current_snapshot.clone()
-        } else {
-            self.history.snapshot(self.selected_index).ok().flatten()
-        }
-    }
-
-    pub fn previous_snapshot(&self) -> Option<ScreenSnapshot> {
-        if self.follow_latest {
-            if self.history.is_empty() {
-                None
-            } else {
-                self.history.snapshot(self.history.len() - 1).ok().flatten()
-            }
-        } else if self.selected_index == 0 {
-            None
-        } else {
-            self.history
-                .snapshot(self.selected_index - 1)
-                .ok()
-                .flatten()
-        }
-    }
-
-    pub fn selected_lines(&self) -> Vec<String> {
-        self.selected_snapshot()
-            .map(|snapshot| snapshot.lines())
-            .unwrap_or_default()
-    }
-
-    pub fn previous_lines(&self) -> Option<Vec<String>> {
-        self.previous_snapshot().map(|snapshot| snapshot.lines())
-    }
-
     pub fn capture(&mut self, width: u16, height: u16) -> Result<()> {
         let CaptureFrame {
             label,
+            timestamp_unix_ms,
             snapshot,
             raw_output,
             changed,
@@ -63,37 +28,54 @@ impl App {
         } else {
             changed
         };
+        let metadata = self.complete_metadata(
+            &snapshot,
+            super::AppHistoryMetadata {
+                label,
+                timestamp_unix_ms,
+                frame_seq: 0,
+                changed: current_changed,
+                width: snapshot.width(),
+                height: snapshot.height(),
+                changed_cell_count: 0,
+                input_event_count_since_prev: 0,
+                resized: false,
+                input_summary: String::new(),
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: String::new(),
+            },
+        );
 
         self.archive_current_snapshot()?;
-        self.set_current_snapshot(snapshot, label, current_changed);
+        self.set_current_snapshot(snapshot, metadata);
+        self.trace.pending_input_events.clear();
+        self.trace.pending_resize_event = None;
 
         if !self.follow_latest && self.history.is_empty() {
             self.follow_latest = true;
         }
         self.rebuild_filter()?;
         self.append_log_record()?;
+        self.maybe_save_triggered_snapshot()?;
+        self.maybe_run_aftercommand(&raw_output)?;
         self.last_tick = Instant::now();
         Ok(())
     }
 
     pub(super) fn archive_current_snapshot(&mut self) -> Result<()> {
-        let (Some(previous_snapshot), Some(previous_label)) =
-            (self.current_snapshot.take(), self.current_label.take())
+        let (Some(previous_snapshot), Some(previous_metadata)) =
+            (self.current_snapshot.take(), self.current_metadata.take())
         else {
             return Ok(());
         };
 
-        self.history.push(
-            previous_snapshot,
-            HistoryMetadata {
-                label: previous_label.clone(),
-            },
-        )?;
-        self.metadata.push(super::AppHistoryMetadata {
-            label: previous_label,
-            changed: self.current_changed,
-        });
-        if self.metadata.len() > self.limit {
+        self.history
+            .push(previous_snapshot, previous_metadata.to_history_metadata())?;
+        self.metadata.push(previous_metadata);
+        if self.metadata.len() > self.trim_trigger_len() {
             self.trim_history()?;
         }
         Ok(())
@@ -102,17 +84,81 @@ impl App {
     pub(super) fn set_current_snapshot(
         &mut self,
         snapshot: ScreenSnapshot,
-        label: String,
-        changed: bool,
+        metadata: super::AppHistoryMetadata,
     ) {
         self.current_snapshot = Some(snapshot);
-        self.current_label = Some(label);
-        self.current_changed = changed;
+        self.current_metadata = Some(metadata);
+        self.invalidate_view_cache();
+    }
+
+    pub(super) fn complete_metadata(
+        &mut self,
+        snapshot: &ScreenSnapshot,
+        mut metadata: super::AppHistoryMetadata,
+    ) -> super::AppHistoryMetadata {
+        if metadata.frame_seq == 0 {
+            metadata.frame_seq = self.next_frame_seq;
+        }
+        self.next_frame_seq = self
+            .next_frame_seq
+            .max(metadata.frame_seq.saturating_add(1));
+
+        if metadata.width == 0 {
+            metadata.width = snapshot.width();
+        }
+        if metadata.height == 0 {
+            metadata.height = snapshot.height();
+        }
+
+        let previous = self.current_snapshot.as_ref();
+        if metadata.changed && metadata.changed_cell_count == 0 {
+            metadata.changed_cell_count = snapshot.changed_cell_count_since(previous);
+        }
+        if metadata.input_event_count_since_prev == 0 {
+            metadata.input_event_count_since_prev = self.trace.pending_input_events.len();
+        }
+        if metadata.input_summary.is_empty() {
+            metadata.input_summary = self.summarize_pending_input_events();
+        }
+        if let Some(resize) = &self.trace.pending_resize_event {
+            metadata.resized = true;
+            metadata.resize_from_width = resize.old_width;
+            metadata.resize_from_height = resize.old_height;
+            metadata.resize_to_width = resize.new_width;
+            metadata.resize_to_height = resize.new_height;
+            metadata.resize_source = resize.source.to_string();
+        } else {
+            metadata.resized = metadata.resized
+                || previous.is_some_and(|previous_snapshot| {
+                    previous_snapshot.width() != snapshot.width()
+                        || previous_snapshot.height() != snapshot.height()
+                });
+        }
+
+        metadata
+    }
+
+    fn summarize_pending_input_events(&self) -> String {
+        if self.trace.pending_input_events.is_empty() {
+            return String::new();
+        }
+
+        let mut parts = Vec::new();
+        for event in self.trace.pending_input_events.iter().rev().take(3).rev() {
+            parts.push(event.summary());
+        }
+
+        let suffix = if self.trace.pending_input_events.len() > 3 {
+            format!(" (+{} more)", self.trace.pending_input_events.len() - 3)
+        } else {
+            String::new()
+        };
+        format!("input: {}{}", parts.join(", "), suffix)
     }
 
     pub(super) fn save_snapshot(&mut self) -> Result<()> {
         let Some(snapshot) = self.selected_snapshot() else {
-            self.status_message = Some("no snapshot to save".to_string());
+            self.ui.status_message = Some("no snapshot to save".to_string());
             return Ok(());
         };
 
@@ -137,11 +183,11 @@ impl App {
                     FilterMode::Plain => "/",
                     FilterMode::Regex => "*",
                 },
-                self.filter_query
+                self.ui.filter_query
             ),
         ];
         save_snapshot(&snapshot, &path, self.screenshot_format, &header)?;
-        self.status_message = Some(format!(
+        self.ui.status_message = Some(format!(
             "snapshot saved: {} ({})",
             display_tmp_path(&path),
             self.screenshot_format.label()
@@ -151,7 +197,7 @@ impl App {
 
     pub(super) fn cycle_screenshot_format(&mut self) {
         self.screenshot_format = self.screenshot_format.cycle();
-        self.status_message = Some(format!(
+        self.ui.status_message = Some(format!(
             "snapshot format: {} -> {}",
             self.screenshot_format.label(),
             display_tmp_path(&self.screenshot_dir)

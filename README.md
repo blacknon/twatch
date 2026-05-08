@@ -1,12 +1,13 @@
 twatch
 ======
 
-twatch - record, rewind, and diff terminal UI screens.
+twatch - record, rewind, inspect, and diff terminal UI screens.
 
 ## Description
 
 `twatch` runs a TUI application inside a PTY, records screen changes, and lets
 you move back through history later, similar to [hwatch](https://github.com/blacknon/hwatch).
+It is aimed at debugging terminal UIs, not only recording them.
 
 ### demo
 
@@ -25,9 +26,13 @@ you move back through history later, similar to [hwatch](https://github.com/blac
 - Show history in an overlay pane
 - Highlight changed cells in watch diff mode
 - Filter history with string (`/`) or regex (`*`)
+- Inspect a selected cell and compare it with the previous frame
+- Record input and resize context with frame metadata
 - Save and load history logs
+- Replay a saved JSONL trace in read-only mode
 - Save the selected snapshot as ANSI text or SVG
-- Run an experimental `aftercommand` hook when output changes
+- Auto-save snapshots on string, regex, or change-count triggers
+- Run an asynchronous experimental `aftercommand` trigger
 - Compress in-memory history with experimental `-C`
 - Output the current screen in batch mode
 - Propagate terminal resize to both `twatch` and the child TUI
@@ -60,10 +65,24 @@ Options:
       --batch-diff-only                            Print only added content for batch diff output
       --batch-no-color                             Disable ANSI color sequences in batch output
   -A, --aftercommand <AFTERCOMMAND>
+      --aftercommand-regex <AFTERCOMMAND_REGEX>    Only run aftercommand when output matches this regex
+      --aftercommand-change-cells <AFTERCOMMAND_CHANGE_CELLS>
+                                                   Only run aftercommand when changed cell count reaches this threshold
+      --aftercommand-every <AFTERCOMMAND_EVERY>    Only run aftercommand on every Nth changed frame
+      --aftercommand-debounce-ms <AFTERCOMMAND_DEBOUNCE_MS>
+                                                   Debounce aftercommand for this many milliseconds
+      --aftercommand-timeout-ms <AFTERCOMMAND_TIMEOUT_MS>
+                                                   Kill aftercommand if it exceeds this timeout in milliseconds [default: 3000]
   -C, --compress
   -l, --logfile <LOGFILE>
+      --replay <REPLAY>                            Replay a saved JSONL trace in read-only mode
       --screenshot-dir <SCREENSHOT_DIR>            [default: /tmp]
       --screenshot-format <SCREENSHOT_FORMAT>      [default: text] [possible values: text, svg]
+      --snapshot-on <SNAPSHOT_ON>                  Auto-save a snapshot when the screen contains this string
+      --snapshot-on-regex <SNAPSHOT_ON_REGEX>      Auto-save a snapshot when the screen matches this regex
+      --snapshot-on-change-cells <SNAPSHOT_ON_CHANGE_CELLS>
+                                                   Auto-save a snapshot when changed cell count reaches this threshold
+      --snapshot-once                              Only trigger automatic snapshot once
   -s, --shell <SHELL>                              [default: "sh -c"]
   -d, --differences <DIFFERENCES>                  Diff mode: watch for TUI mode, list/word for batch mode [default: none] [possible values: none, watch, list, word]
   -L, --limit <LIMIT>                              [default: 500]
@@ -91,6 +110,9 @@ Options:
 | `0` | Disable diff |
 | `1` | Enable watch diff |
 | `p` | Pause/unpause capture |
+| `Shift+P` | Pause/unpause the child process |
+| `I` | Toggle cell inspector |
+| `Shift+Arrow` | Move inspector cursor |
 | `/` | Filter history by string |
 | `*` | Filter history by regex |
 | `i` | Enter child app input mode |
@@ -98,7 +120,14 @@ Options:
 | `D` | Delete selected history |
 | `X` | Clear history except selected |
 | `s` | Cycle snapshot format (`text(ANSI)` / `svg`) |
-| `S` | Save selected snapshot |
+| `Shift+S` | Toggle selected frame info |
+| `Ctrl+S` | Save selected snapshot |
+
+### Notes
+
+- Mouse passthrough is enabled only while viewing `latest`
+- `p` pauses `twatch` capture, not the child process
+- `Shift+P` pauses or resumes the child process itself
 
 ## Example
 
@@ -185,14 +214,47 @@ This is useful for debugging long-running screens outside the live UI.
 twatch --logfile ./twatch.jsonl htop
 ```
 
-### Aftercommand
+### Replay mode
 
-Run a shell hook when the captured screen changes.
-This is still experimental, and high-churn TUIs such as `top`-style apps may
-trigger it very frequently because the hook currently runs on every detected change.
+Open a saved JSONL trace without launching a child PTY.
+This is useful for issue reports or postmortem debugging.
 
 ```bash
-twatch -A 'jq -r .output <<<"$TWATCH_DATA" >/tmp/twatch.out' htop
+twatch --replay ./twatch.jsonl
+```
+
+### Aftercommand
+
+Run a shell hook asynchronously when debug-relevant trigger conditions match.
+You can limit it with regex, change count, cadence, debounce, and timeout options.
+
+```bash
+twatch -A 'jq -r .output <<<"$TWATCH_DATA" >/tmp/twatch.out' \
+  --aftercommand-regex 'panic|error' \
+  --aftercommand-debounce-ms 500 \
+  htop
+```
+
+`TWATCH_DATA` includes frame metadata such as:
+
+- `frame_seq`
+- `unix_timestamp`
+- `width`
+- `height`
+- `changed_cell_count`
+- `matched_rules`
+- `last_input_summary`
+
+### Automatic snapshot trigger
+
+Save snapshots automatically when a frame matches a string, regex, or change-count threshold.
+
+```bash
+twatch --snapshot-on 'panic' --snapshot-once htop
+```
+
+```bash
+twatch --snapshot-on-regex 'panic|traceback' --snapshot-on-change-cells 100 htop
 ```
 
 ### Compression
@@ -227,3 +289,5 @@ These projects explore similar terminal wrapping and history-oriented workflows.
 - Mouse support is implemented, but behavior still depends on the child TUI and
   the mouse protocol it enables.
 - Snapshot save defaults to `/tmp`, and text output keeps ANSI color escapes.
+- `p` pauses `twatch` screen capture and history updates.
+- `Shift+P` suspends or resumes the wrapped child process.

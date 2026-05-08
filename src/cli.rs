@@ -48,17 +48,60 @@ pub struct Cli {
     #[arg(short = 'A', long)]
     pub aftercommand: Option<String>,
 
+    #[arg(long, help = "Only run aftercommand when output matches this regex")]
+    pub aftercommand_regex: Option<String>,
+
+    #[arg(
+        long,
+        help = "Only run aftercommand when changed cell count reaches this threshold"
+    )]
+    pub aftercommand_change_cells: Option<usize>,
+
+    #[arg(long, help = "Only run aftercommand on every Nth changed frame")]
+    pub aftercommand_every: Option<usize>,
+
+    #[arg(long, help = "Debounce aftercommand for this many milliseconds")]
+    pub aftercommand_debounce_ms: Option<u64>,
+
+    #[arg(
+        long,
+        default_value_t = 3000,
+        help = "Kill aftercommand if it exceeds this timeout in milliseconds"
+    )]
+    pub aftercommand_timeout_ms: u64,
+
     #[arg(short = 'C', long)]
     pub compress: bool,
 
     #[arg(short = 'l', long)]
     pub logfile: Option<String>,
 
+    #[arg(long, help = "Replay a saved JSONL trace in read-only mode")]
+    pub replay: Option<String>,
+
     #[arg(long, default_value = "/tmp")]
     pub screenshot_dir: String,
 
     #[arg(long, value_enum, default_value_t = ScreenshotFormatArg::Text)]
     pub screenshot_format: ScreenshotFormatArg,
+
+    #[arg(
+        long,
+        help = "Auto-save a snapshot when the screen contains this string"
+    )]
+    pub snapshot_on: Option<String>,
+
+    #[arg(long, help = "Auto-save a snapshot when the screen matches this regex")]
+    pub snapshot_on_regex: Option<String>,
+
+    #[arg(
+        long,
+        help = "Auto-save a snapshot when changed cell count reaches this threshold"
+    )]
+    pub snapshot_on_change_cells: Option<usize>,
+
+    #[arg(long, help = "Only trigger automatic snapshot once")]
+    pub snapshot_once: bool,
 
     #[arg(short = 's', long, default_value_t = default_shell())]
     pub shell: String,

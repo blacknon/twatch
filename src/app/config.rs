@@ -1,0 +1,79 @@
+use std::path::PathBuf;
+
+use anyhow::{Context, Result};
+use regex::Regex;
+
+use super::{App, DiffMode};
+use crate::aftercommand::{AfterCommandConfig, AfterCommandRuntime};
+use crate::cli::Cli;
+use crate::screenshot::ScreenshotFormat;
+
+pub(super) struct AppConfig {
+    pub interval_secs: f64,
+    pub child_pause_supported: bool,
+    pub diff_mode: DiffMode,
+    pub history_limit: usize,
+    pub checkpoint_interval: usize,
+    pub compress: bool,
+    pub logfile: Option<String>,
+    pub replay_mode: bool,
+    pub screenshot_dir: PathBuf,
+    pub screenshot_format: ScreenshotFormat,
+    pub snapshot_on: Option<String>,
+    pub snapshot_on_regex: Option<Regex>,
+    pub snapshot_on_change_cells: Option<usize>,
+    pub snapshot_once: bool,
+    pub aftercommand_runtime: Option<AfterCommandRuntime>,
+    pub command_display: String,
+}
+
+impl AppConfig {
+    pub(super) fn from_cli(cli: &Cli, child_pause_supported: bool) -> Result<Self> {
+        let snapshot_on_regex = cli
+            .snapshot_on_regex
+            .as_ref()
+            .map(|pattern| {
+                Regex::new(pattern).with_context(|| format!("invalid snapshot regex: {pattern}"))
+            })
+            .transpose()?;
+        let aftercommand_regex = cli
+            .aftercommand_regex
+            .as_ref()
+            .map(|pattern| {
+                Regex::new(pattern)
+                    .with_context(|| format!("invalid aftercommand regex: {pattern}"))
+            })
+            .transpose()?;
+        let command_display = App::command_display_from_cli(cli);
+
+        Ok(Self {
+            interval_secs: cli.interval,
+            child_pause_supported,
+            diff_mode: cli.differences.into(),
+            history_limit: cli.limit.max(1),
+            checkpoint_interval: cli.checkpoint_interval.max(1),
+            compress: cli.compress,
+            logfile: cli.replay.clone().or(cli.logfile.clone()),
+            replay_mode: cli.replay.is_some(),
+            screenshot_dir: PathBuf::from(&cli.screenshot_dir),
+            screenshot_format: cli.screenshot_format.into(),
+            snapshot_on: cli.snapshot_on.clone(),
+            snapshot_on_regex,
+            snapshot_on_change_cells: cli.snapshot_on_change_cells,
+            snapshot_once: cli.snapshot_once,
+            aftercommand_runtime: cli.aftercommand.as_ref().map(|hook| {
+                AfterCommandRuntime::new(AfterCommandConfig {
+                    hook: hook.clone(),
+                    shell: cli.shell.clone(),
+                    command_display: command_display.clone(),
+                    regex: aftercommand_regex.clone(),
+                    changed_cells: cli.aftercommand_change_cells,
+                    every: cli.aftercommand_every,
+                    debounce_ms: cli.aftercommand_debounce_ms,
+                    timeout_ms: cli.aftercommand_timeout_ms,
+                })
+            }),
+            command_display,
+        })
+    }
+}

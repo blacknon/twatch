@@ -217,6 +217,38 @@ impl ScreenSnapshot {
             }
         }
     }
+
+    pub fn changed_cell_count_since(&self, previous: Option<&ScreenSnapshot>) -> usize {
+        if previous.is_none() {
+            return self
+                .cells
+                .iter()
+                .filter(|cell| **cell != Cell::blank())
+                .count();
+        }
+
+        let width = self
+            .width
+            .max(previous.map(|snapshot| snapshot.width).unwrap_or(0));
+        let height = self
+            .height
+            .max(previous.map(|snapshot| snapshot.height).unwrap_or(0));
+
+        let mut changed = 0usize;
+        for y in 0..height {
+            for x in 0..width {
+                let before = previous
+                    .and_then(|snapshot| snapshot.cell(x, y))
+                    .cloned()
+                    .unwrap_or_else(Cell::blank);
+                let after = self.cell(x, y).cloned().unwrap_or_else(Cell::blank);
+                if before != after {
+                    changed += 1;
+                }
+            }
+        }
+        changed
+    }
 }
 
 impl fmt::Display for ScreenSnapshot {
@@ -271,5 +303,28 @@ mod tests {
         let snapshot = ScreenSnapshot::from_text_lines(5, 2, &["abcde", "fghij"]);
         let cropped = snapshot.cropped(1, 0, 3, 2);
         assert_eq!(cropped.lines(), vec!["bcd".to_string(), "ghi".to_string()]);
+    }
+
+    #[test]
+    fn counts_changed_cells_against_previous_snapshot() {
+        let before = ScreenSnapshot::from_text_lines(4, 2, &["ab", ""]);
+        let after = ScreenSnapshot::from_text_lines(4, 2, &["ax", "z"]);
+
+        assert_eq!(after.changed_cell_count_since(Some(&before)), 2);
+    }
+
+    #[test]
+    fn counts_changed_cells_against_blank_when_no_previous_snapshot() {
+        let snapshot = ScreenSnapshot::from_text_lines(4, 1, &["ab"]);
+
+        assert_eq!(snapshot.changed_cell_count_since(None), 2);
+    }
+
+    #[test]
+    fn does_not_count_blank_cells_added_by_resize_as_changed() {
+        let before = ScreenSnapshot::from_text_lines(2, 1, &[""]);
+        let after = ScreenSnapshot::from_text_lines(4, 2, &[""]);
+
+        assert_eq!(after.changed_cell_count_since(Some(&before)), 0);
     }
 }
