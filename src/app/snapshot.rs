@@ -51,8 +51,8 @@ impl App {
 
         self.archive_current_snapshot()?;
         self.set_current_snapshot(snapshot, metadata);
-        self.pending_input_events.clear();
-        self.pending_resize_event = None;
+        self.trace.pending_input_events.clear();
+        self.trace.pending_resize_event = None;
 
         if !self.follow_latest && self.history.is_empty() {
             self.follow_latest = true;
@@ -115,12 +115,12 @@ impl App {
             metadata.changed_cell_count = snapshot.changed_cell_count_since(previous);
         }
         if metadata.input_event_count_since_prev == 0 {
-            metadata.input_event_count_since_prev = self.pending_input_events.len();
+            metadata.input_event_count_since_prev = self.trace.pending_input_events.len();
         }
         if metadata.input_summary.is_empty() {
             metadata.input_summary = self.summarize_pending_input_events();
         }
-        if let Some(resize) = &self.pending_resize_event {
+        if let Some(resize) = &self.trace.pending_resize_event {
             metadata.resized = true;
             metadata.resize_from_width = resize.old_width;
             metadata.resize_from_height = resize.old_height;
@@ -139,17 +139,17 @@ impl App {
     }
 
     fn summarize_pending_input_events(&self) -> String {
-        if self.pending_input_events.is_empty() {
+        if self.trace.pending_input_events.is_empty() {
             return String::new();
         }
 
         let mut parts = Vec::new();
-        for event in self.pending_input_events.iter().rev().take(3).rev() {
+        for event in self.trace.pending_input_events.iter().rev().take(3).rev() {
             parts.push(event.summary());
         }
 
-        let suffix = if self.pending_input_events.len() > 3 {
-            format!(" (+{} more)", self.pending_input_events.len() - 3)
+        let suffix = if self.trace.pending_input_events.len() > 3 {
+            format!(" (+{} more)", self.trace.pending_input_events.len() - 3)
         } else {
             String::new()
         };

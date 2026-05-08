@@ -22,7 +22,7 @@ impl App {
 
     fn record_input_event(&mut self, kind: InputTraceKind) {
         let event = InputTraceEvent {
-            seq: self.next_input_seq,
+            seq: self.trace.next_input_seq,
             timestamp_unix_ms: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or(Duration::ZERO)
@@ -30,11 +30,11 @@ impl App {
             kind,
             target_focus: InputTargetFocus::Child,
         };
-        self.next_input_seq += 1;
-        self.pending_input_events.push(event.clone());
-        self.input_trace.push_back(event);
-        while self.input_trace.len() > 256 {
-            self.input_trace.pop_front();
+        self.trace.next_input_seq += 1;
+        self.trace.pending_input_events.push(event.clone());
+        self.trace.input_trace.push_back(event);
+        while self.trace.input_trace.len() > 256 {
+            self.trace.input_trace.pop_front();
         }
     }
 
@@ -65,10 +65,10 @@ impl App {
             new_height,
             source,
         };
-        self.pending_resize_event = Some(event.clone());
-        self.resize_trace.push_back(event);
-        while self.resize_trace.len() > 64 {
-            self.resize_trace.pop_front();
+        self.trace.pending_resize_event = Some(event.clone());
+        self.trace.resize_trace.push_back(event);
+        while self.trace.resize_trace.len() > 64 {
+            self.trace.resize_trace.pop_front();
         }
     }
 }

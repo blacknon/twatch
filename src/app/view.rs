@@ -16,7 +16,8 @@ impl App {
 
     pub fn selected_snapshot(&self) -> Option<ScreenSnapshot> {
         self.ensure_view_cache();
-        self.view_cache
+        self.view
+            .cache
             .borrow()
             .as_ref()
             .and_then(|cache| cache.selected.clone())
@@ -24,7 +25,8 @@ impl App {
 
     pub fn previous_snapshot(&self) -> Option<ScreenSnapshot> {
         self.ensure_view_cache();
-        self.view_cache
+        self.view
+            .cache
             .borrow()
             .as_ref()
             .and_then(|cache| cache.previous.clone())
@@ -138,7 +140,8 @@ impl App {
     fn ensure_view_cache(&self) {
         let key = self.current_view_cache_key();
         if self
-            .view_cache
+            .view
+            .cache
             .borrow()
             .as_ref()
             .is_some_and(|cache| cache.key == key)
@@ -167,7 +170,7 @@ impl App {
             (selected, previous)
         };
 
-        *self.view_cache.borrow_mut() = Some(ViewCache {
+        *self.view.cache.borrow_mut() = Some(ViewCache {
             key,
             selected,
             previous,
@@ -188,6 +191,6 @@ impl App {
     }
 
     pub(super) fn invalidate_view_cache(&self) {
-        *self.view_cache.borrow_mut() = None;
+        *self.view.cache.borrow_mut() = None;
     }
 }

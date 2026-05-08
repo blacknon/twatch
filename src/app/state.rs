@@ -59,12 +59,8 @@ impl App {
             last_mouse_input: None,
             last_mouse_scroll_input: None,
             next_frame_seq: 1,
-            input_trace: std::collections::VecDeque::with_capacity(256),
-            pending_input_events: Vec::new(),
-            next_input_seq: 1,
-            resize_trace: std::collections::VecDeque::with_capacity(64),
-            pending_resize_event: None,
-            view_cache: std::cell::RefCell::new(None),
+            trace: super::TraceState::new(),
+            view: super::ViewState::new(),
         };
 
         app.load_history_from_log()?;

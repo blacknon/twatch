@@ -189,6 +189,38 @@ struct ViewCache {
     previous: Option<ScreenSnapshot>,
 }
 
+struct TraceState {
+    input_trace: VecDeque<InputTraceEvent>,
+    pending_input_events: Vec<InputTraceEvent>,
+    next_input_seq: u64,
+    resize_trace: VecDeque<ResizeTraceEvent>,
+    pending_resize_event: Option<ResizeTraceEvent>,
+}
+
+impl TraceState {
+    fn new() -> Self {
+        Self {
+            input_trace: VecDeque::with_capacity(256),
+            pending_input_events: Vec::new(),
+            next_input_seq: 1,
+            resize_trace: VecDeque::with_capacity(64),
+            pending_resize_event: None,
+        }
+    }
+}
+
+struct ViewState {
+    cache: RefCell<Option<ViewCache>>,
+}
+
+impl ViewState {
+    fn new() -> Self {
+        Self {
+            cache: RefCell::new(None),
+        }
+    }
+}
+
 impl InputTraceEvent {
     fn summary(&self) -> String {
         match &self.kind {
@@ -251,12 +283,8 @@ pub struct App {
     last_mouse_input: Option<Instant>,
     last_mouse_scroll_input: Option<Instant>,
     next_frame_seq: u64,
-    input_trace: VecDeque<InputTraceEvent>,
-    pending_input_events: Vec<InputTraceEvent>,
-    next_input_seq: u64,
-    resize_trace: VecDeque<ResizeTraceEvent>,
-    pending_resize_event: Option<ResizeTraceEvent>,
-    view_cache: RefCell<Option<ViewCache>>,
+    trace: TraceState,
+    view: ViewState,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
