@@ -25,7 +25,7 @@ pub(crate) fn suspend_process(pid: u32) -> io::Result<()> {
     use std::mem::size_of;
     use winapi::shared::minwindef::FALSE;
     use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
-    use winapi::um::processthreadsapi::{OpenThread, SuspendThread};
+    use winapi::um::processthreadsapi::{OpenThread, ResumeThread, SuspendThread};
     use winapi::um::tlhelp32::{
         CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
     };
@@ -49,6 +49,7 @@ pub(crate) fn suspend_process(pid: u32) -> io::Result<()> {
 
         let mut saw_thread = false;
         let mut first_err = None;
+        let mut suspended_thread_ids = Vec::new();
         if Thread32First(snapshot, &mut entry) != FALSE {
             loop {
                 if entry.th32OwnerProcessID == pid {
@@ -62,6 +63,9 @@ pub(crate) fn suspend_process(pid: u32) -> io::Result<()> {
                         let result = SuspendThread(thread);
                         if result == u32::MAX && first_err.is_none() {
                             first_err = Some(io::Error::last_os_error());
+                        }
+                        if result != u32::MAX {
+                            suspended_thread_ids.push(entry.th32ThreadID);
                         }
                         CloseHandle(thread);
                     }
@@ -78,6 +82,14 @@ pub(crate) fn suspend_process(pid: u32) -> io::Result<()> {
         CloseHandle(snapshot);
 
         if let Some(err) = first_err {
+            for thread_id in suspended_thread_ids {
+                let thread = OpenThread(THREAD_SUSPEND_RESUME, FALSE, thread_id);
+                if thread.is_null() {
+                    continue;
+                }
+                let _ = ResumeThread(thread);
+                CloseHandle(thread);
+            }
             return Err(err);
         }
         if !saw_thread {

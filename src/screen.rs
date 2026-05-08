@@ -240,8 +240,8 @@ impl ScreenSnapshot {
                 let before = previous
                     .and_then(|snapshot| snapshot.cell(x, y))
                     .cloned()
-                    .unwrap_or_default();
-                let after = self.cell(x, y).cloned().unwrap_or_default();
+                    .unwrap_or_else(Cell::blank);
+                let after = self.cell(x, y).cloned().unwrap_or_else(Cell::blank);
                 if before != after {
                     changed += 1;
                 }
@@ -318,5 +318,13 @@ mod tests {
         let snapshot = ScreenSnapshot::from_text_lines(4, 1, &["ab"]);
 
         assert_eq!(snapshot.changed_cell_count_since(None), 2);
+    }
+
+    #[test]
+    fn does_not_count_blank_cells_added_by_resize_as_changed() {
+        let before = ScreenSnapshot::from_text_lines(2, 1, &[""]);
+        let after = ScreenSnapshot::from_text_lines(4, 2, &[""]);
+
+        assert_eq!(after.changed_cell_count_since(Some(&before)), 0);
     }
 }
