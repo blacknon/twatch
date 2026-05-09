@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::time::Duration;
 
 use anyhow::Result;
 use crossterm::event::{self, Event};
@@ -11,6 +12,10 @@ use crate::runner::SourceEvent;
 use crate::ui;
 
 impl App {
+    fn event_driven_poll_timeout(&self) -> Duration {
+        self.tick_timeout().min(Duration::from_millis(50))
+    }
+
     pub fn run(mut self, terminal: DefaultTerminal) -> Result<()> {
         let (tx, rx) = mpsc::channel();
         let input_tx = tx.clone();
@@ -100,7 +105,7 @@ impl App {
             }
 
             if self.source.is_event_driven() {
-                match rx.recv() {
+                match rx.recv_timeout(self.event_driven_poll_timeout()) {
                     Ok(AppEvent::Terminal(event)) => match self.process_terminal_event(event)? {
                         LoopControl::Continue(redraw) => {
                             if !self.paused && self.source.has_pending_update() {
@@ -119,7 +124,7 @@ impl App {
                             needs_redraw = true;
                         }
                     }
-                    Ok(AppEvent::SourceClosed) => {
+                    Ok(AppEvent::SourceClosed(reason)) => {
                         if let Some(flag) = &pending_source_update {
                             flag.store(false, Ordering::Release);
                         }
@@ -127,9 +132,21 @@ impl App {
                             self.capture_terminal_size(&terminal)?;
                             terminal.draw(|frame| ui::draw(frame, &self))?;
                         }
+                        if let Some(reason) = reason {
+                            self.ui.status_message = Some(format!("source closed: {reason}"));
+                        }
                         break;
                     }
-                    Err(_) => break,
+                    Err(RecvTimeoutError::Timeout) => {
+                        if !self.paused && self.source.has_pending_update() {
+                            if let Some(flag) = &pending_source_update {
+                                flag.store(false, Ordering::Release);
+                            }
+                            self.capture_terminal_size(&terminal)?;
+                            needs_redraw = true;
+                        }
+                    }
+                    Err(RecvTimeoutError::Disconnected) => break,
                 }
             } else {
                 match rx.recv_timeout(self.tick_timeout()) {
@@ -139,7 +156,7 @@ impl App {
                         }
                         LoopControl::Break => break,
                     },
-                    Ok(AppEvent::SourceUpdated) | Ok(AppEvent::SourceClosed) => {}
+                    Ok(AppEvent::SourceUpdated) | Ok(AppEvent::SourceClosed(_)) => {}
                     Err(RecvTimeoutError::Timeout) => {
                         if !self.paused && self.should_capture_now() {
                             self.capture_terminal_size(&terminal)?;
@@ -172,7 +189,12 @@ fn relay_source_event(
         }
         SourceEvent::Closed => {
             update_tx
-                .send(AppEvent::SourceClosed)
+                .send(AppEvent::SourceClosed(None))
+                .map_err(|_| anyhow::anyhow!("source event channel closed"))?;
+        }
+        SourceEvent::ClosedWithError(reason) => {
+            update_tx
+                .send(AppEvent::SourceClosed(Some(reason)))
                 .map_err(|_| anyhow::anyhow!("source event channel closed"))?;
         }
     }
@@ -200,5 +222,23 @@ mod tests {
             _ => panic!("expected source updated event"),
         }
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn relays_source_closed_error_reason() {
+        let (tx, rx) = mpsc::channel();
+        let pending = AtomicBool::new(false);
+
+        relay_source_event(
+            SourceEvent::ClosedWithError("boom".to_string()),
+            &pending,
+            &tx,
+        )
+        .unwrap();
+
+        match rx.try_recv().unwrap() {
+            AppEvent::SourceClosed(Some(reason)) => assert_eq!(reason, "boom"),
+            _ => panic!("expected source closed with reason"),
+        }
     }
 }

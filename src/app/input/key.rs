@@ -1,10 +1,14 @@
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::app::{App, DiffMode, FocusPane, InputMode};
 
 impl App {
     pub(crate) fn handle_key_event(&mut self, key: KeyEvent) -> Result<bool> {
+        if key.kind == KeyEventKind::Release {
+            return Ok(false);
+        }
+
         if self.should_ignore_mouse_ghost_key(key) {
             return Ok(false);
         }

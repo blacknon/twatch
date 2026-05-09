@@ -37,16 +37,20 @@ pub trait FrameSource {
     fn supports_child_pause(&self) -> bool {
         false
     }
+    fn debug_status(&self) -> Option<String> {
+        None
+    }
     fn has_pending_update(&self) -> bool;
     fn is_event_driven(&self) -> bool;
     fn take_update_receiver(&mut self) -> Option<Receiver<SourceEvent>>;
     fn terminate(&mut self) -> Result<()>;
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SourceEvent {
     Updated,
     Closed,
+    ClosedWithError(String),
 }
 
 pub struct DemoRunner {

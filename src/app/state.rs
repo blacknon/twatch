@@ -81,6 +81,10 @@ impl App {
         &self.command_display
     }
 
+    pub fn source_debug_status(&self) -> Option<String> {
+        self.source.debug_status()
+    }
+
     pub fn screenshot_format(&self) -> crate::screenshot::ScreenshotFormat {
         self.screenshot_format
     }

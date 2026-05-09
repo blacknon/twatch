@@ -4,8 +4,8 @@ use crate::logging::{LogRecord, append_record};
 use crate::runner::{CaptureFrame, FrameSource, SourceEvent};
 use crate::screen::ScreenSnapshot;
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyModifiers};
-use crossterm::event::{KeyEvent, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyEvent, KeyEventState, MouseButton, MouseEvent, MouseEventKind};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -80,6 +80,10 @@ impl FrameSource for MockSource {
 
     fn supports_child_pause(&self) -> bool {
         self.child_pause_supported
+    }
+
+    fn debug_status(&self) -> Option<String> {
+        None
     }
 
     fn has_pending_update(&self) -> bool {
@@ -203,6 +207,27 @@ fn ctrl_c_opens_exit_when_filter_is_empty() {
 }
 
 #[test]
+fn ctrl_c_release_does_not_close_exit_dialog() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![frame("a", &["worker-01 ok"])])),
+    )
+    .unwrap();
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+        .unwrap();
+    app.handle_key_event(KeyEvent {
+        code: KeyCode::Char('c'),
+        modifiers: KeyModifiers::CONTROL,
+        kind: KeyEventKind::Release,
+        state: KeyEventState::empty(),
+    })
+    .unwrap();
+
+    assert!(app.ui.show_exit_confirm);
+}
+
+#[test]
 fn ignores_diff_ghost_key_immediately_after_mouse_scroll() {
     let mut app = App::new(
         &test_cli(),
@@ -221,6 +246,27 @@ fn ignores_diff_ghost_key_immediately_after_mouse_scroll() {
         .unwrap();
 
     assert_eq!(app.diff_mode, super::DiffMode::None);
+}
+
+#[test]
+fn backspace_release_does_not_retoggle_history_pane() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![frame("a", &["worker-01 ok"])])),
+    )
+    .unwrap();
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
+        .unwrap();
+    app.handle_key_event(KeyEvent {
+        code: KeyCode::Backspace,
+        modifiers: KeyModifiers::NONE,
+        kind: KeyEventKind::Release,
+        state: KeyEventState::empty(),
+    })
+    .unwrap();
+
+    assert!(app.ui.show_history);
 }
 
 #[test]

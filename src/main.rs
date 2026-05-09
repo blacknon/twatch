@@ -117,7 +117,7 @@ fn build_source(
 
     Ok(Box::new(PtyRunner::spawn(
         &cli.shell,
-        cli.command.join(" "),
+        &cli.command,
         aftercommand,
         width,
         height,

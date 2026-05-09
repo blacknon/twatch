@@ -28,7 +28,7 @@ mod view;
 enum AppEvent {
     Terminal(crossterm::event::Event),
     SourceUpdated,
-    SourceClosed,
+    SourceClosed(Option<String>),
 }
 
 enum LoopControl {

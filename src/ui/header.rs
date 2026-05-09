@@ -9,7 +9,7 @@ use crate::app::{App, DiffMode, FilterMode};
 
 use super::{
     BADGE_BLUE, BADGE_CYAN, BADGE_DIM_TEXT, BADGE_GREEN, BADGE_GREY, BADGE_MAGENTA, BADGE_TEXT,
-    COMMAND_ACCENT, COMMAND_FG, HEADER_BG, HEADER_SUB_BG, TIMESTAMP_FG,
+    COMMAND_ACCENT, HEADER_BG, HEADER_SUB_BG, TIMESTAMP_FG,
 };
 
 pub(super) fn draw_header_line_one(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -28,16 +28,16 @@ pub(super) fn draw_header_line_one(frame: &mut Frame<'_>, app: &App, area: Rect)
     } else {
         format!("Every {:>4.3}", app.interval_secs)
     };
+    let mut command_text = format!("{cadence} {}", app.command_display());
+    if let Some(debug_status) = app.source_debug_status() {
+        command_text.push_str(" | ");
+        command_text.push_str(&debug_status);
+    }
     let command_line = Line::from(vec![
         Span::styled(" ", Style::default().bg(HEADER_BG)),
-        Span::styled(cadence, Style::default().fg(Color::White).bg(HEADER_BG)),
-        Span::styled(" ", Style::default().bg(HEADER_BG)),
         Span::styled(
-            app.command_display().to_string(),
-            Style::default()
-                .fg(COMMAND_FG)
-                .bg(HEADER_BG)
-                .add_modifier(Modifier::BOLD),
+            truncate_text(&command_text, usize::from(chunks[0].width).saturating_sub(1)),
+            Style::default().fg(Color::White).bg(HEADER_BG),
         ),
     ]);
 
@@ -144,6 +144,7 @@ pub(super) fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect)
 
     let available_left = usize::from(area.width).saturating_sub(right_width.saturating_add(1));
     let resize_summary = app.selected_resize_summary();
+    let debug_status = app.source_debug_status();
     let left_text = fit_header_left(
         &filter_label,
         input_hint_long,
@@ -152,7 +153,8 @@ pub(super) fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect)
             .status_message
             .as_deref()
             .or(resize_summary.as_deref())
-            .or_else(|| app.selected_input_summary()),
+            .or_else(|| app.selected_input_summary())
+            .or(debug_status.as_deref()),
         available_left.saturating_sub(1),
     );
     let left = Line::from(vec![Span::styled(
