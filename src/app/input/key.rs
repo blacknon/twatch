@@ -1,11 +1,17 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::app::{App, DiffMode, FocusPane, InputMode};
+use crate::app::{
+    App, BrokenMouseEscape, DiffMode, FocusPane, InputMode, MOUSE_ESCAPE_GHOST_TIMEOUT,
+};
 
 impl App {
     pub(crate) fn handle_key_event(&mut self, key: KeyEvent) -> Result<bool> {
         if key.kind == KeyEventKind::Release {
+            return Ok(false);
+        }
+
+        if self.consume_broken_mouse_escape_key(key) {
             return Ok(false);
         }
 
@@ -152,4 +158,112 @@ impl App {
         }
         Ok(false)
     }
+
+    fn consume_broken_mouse_escape_key(&mut self, key: KeyEvent) -> bool {
+        if self
+            .last_mouse_input
+            .is_none_or(|last| last.elapsed() > MOUSE_ESCAPE_GHOST_TIMEOUT)
+        {
+            self.pending_mouse_escape = None;
+            return false;
+        }
+
+        if !mouse_escape_modifiers_are_supported(key.modifiers) {
+            self.pending_mouse_escape = None;
+            return false;
+        }
+
+        match self.pending_mouse_escape.as_mut() {
+            Some(BrokenMouseEscape::Esc) => match key.code {
+                KeyCode::Char('[') => {
+                    self.pending_mouse_escape = Some(BrokenMouseEscape::Csi);
+                    true
+                }
+                _ => {
+                    self.pending_mouse_escape = None;
+                    false
+                }
+            },
+            Some(BrokenMouseEscape::Csi) => match key.code {
+                KeyCode::Char('<') => {
+                    self.pending_mouse_escape = Some(BrokenMouseEscape::Sgr("<".to_string()));
+                    true
+                }
+                KeyCode::Char('M') => {
+                    self.pending_mouse_escape = Some(BrokenMouseEscape::Legacy(0));
+                    true
+                }
+                _ => {
+                    self.pending_mouse_escape = None;
+                    false
+                }
+            },
+            Some(BrokenMouseEscape::Sgr(buffer)) => match key.code {
+                KeyCode::Char(ch) if matches!(ch, '0'..='9' | ';') && buffer.len() < 32 => {
+                    buffer.push(ch);
+                    true
+                }
+                KeyCode::Char(ch @ ('M' | 'm')) => {
+                    buffer.push(ch);
+                    let is_mouse_tail = is_sgr_mouse_tail(buffer);
+                    self.pending_mouse_escape = None;
+                    is_mouse_tail
+                }
+                _ => {
+                    self.pending_mouse_escape = None;
+                    false
+                }
+            },
+            Some(BrokenMouseEscape::Legacy(payload_len)) => match key.code {
+                KeyCode::Char(_) => {
+                    if *payload_len >= 2 {
+                        self.pending_mouse_escape = None;
+                    } else {
+                        *payload_len += 1;
+                    }
+                    true
+                }
+                _ => {
+                    self.pending_mouse_escape = None;
+                    false
+                }
+            },
+            None => match key.code {
+                KeyCode::Esc => {
+                    self.pending_mouse_escape = Some(BrokenMouseEscape::Esc);
+                    true
+                }
+                _ => false,
+            },
+        }
+    }
+}
+
+fn is_sgr_mouse_tail(value: &str) -> bool {
+    let Some(payload) = value.strip_prefix('<') else {
+        return false;
+    };
+    if payload.is_empty() {
+        return false;
+    }
+    let (coords, suffix) = payload.split_at(payload.len() - 1);
+    if !matches!(suffix, "M" | "m") {
+        return false;
+    }
+    let mut parts = coords.split(';');
+    let (Some(a), Some(b), Some(c), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    !a.is_empty()
+        && !b.is_empty()
+        && !c.is_empty()
+        && a.chars().all(|ch| ch.is_ascii_digit())
+        && b.chars().all(|ch| ch.is_ascii_digit())
+        && c.chars().all(|ch| ch.is_ascii_digit())
+}
+
+fn mouse_escape_modifiers_are_supported(modifiers: KeyModifiers) -> bool {
+    modifiers.is_empty() || modifiers == KeyModifiers::SHIFT
 }

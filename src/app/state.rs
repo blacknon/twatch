@@ -46,6 +46,7 @@ impl App {
             last_tick: Instant::now(),
             last_mouse_input: None,
             last_mouse_scroll_input: None,
+            pending_mouse_escape: None,
             next_frame_seq: 1,
             trace: super::TraceState::new(),
             view: super::ViewState::new(),

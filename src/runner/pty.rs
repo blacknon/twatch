@@ -141,6 +141,8 @@ impl PtyRunner {
         let screen = state.parser.screen();
         let (rows, cols) = screen.size();
         let mut snapshot = ScreenSnapshot::new(cols, rows);
+        let (cursor_row, cursor_col) = screen.cursor_position();
+        snapshot.set_cursor_state(cursor_col, cursor_row, !screen.hide_cursor());
 
         for row in 0..rows {
             for col in 0..cols {
@@ -238,7 +240,7 @@ impl FrameSource for PtyRunner {
         Ok(())
     }
 
-    fn send_mouse(&mut self, event: MouseEvent, body_row_offset: u16) -> Result<()> {
+    fn send_mouse(&mut self, event: MouseEvent, body_row_offset: u16) -> Result<bool> {
         let encoded = {
             let state = self.state.read().expect("terminal state poisoned");
             mouse_to_bytes(
@@ -249,14 +251,14 @@ impl FrameSource for PtyRunner {
             )
         };
         let Some(bytes) = encoded else {
-            return Ok(());
+            return Ok(false);
         };
         let mut writer = self.writer.lock().expect("writer poisoned");
         writer
             .write_all(&bytes)
             .context("failed to write mouse event to PTY")?;
         writer.flush().ok();
-        Ok(())
+        Ok(true)
     }
 
     fn toggle_child_pause(&mut self) -> Result<Option<bool>> {

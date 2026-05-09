@@ -30,7 +30,7 @@ pub trait FrameSource {
     fn capture(&mut self, width: u16, height: u16) -> Result<CaptureFrame>;
     fn resize(&mut self, width: u16, height: u16) -> Result<()>;
     fn send_key(&mut self, key: KeyEvent) -> Result<()>;
-    fn send_mouse(&mut self, event: MouseEvent, body_row_offset: u16) -> Result<()>;
+    fn send_mouse(&mut self, event: MouseEvent, body_row_offset: u16) -> Result<bool>;
     fn toggle_child_pause(&mut self) -> Result<Option<bool>> {
         Ok(None)
     }
@@ -134,8 +134,8 @@ impl FrameSource for DemoRunner {
         Ok(())
     }
 
-    fn send_mouse(&mut self, _event: MouseEvent, _body_row_offset: u16) -> Result<()> {
-        Ok(())
+    fn send_mouse(&mut self, _event: MouseEvent, _body_row_offset: u16) -> Result<bool> {
+        Ok(false)
     }
 
     fn has_pending_update(&self) -> bool {
@@ -168,8 +168,8 @@ impl FrameSource for ReplayRunner {
         Ok(())
     }
 
-    fn send_mouse(&mut self, _event: MouseEvent, _body_row_offset: u16) -> Result<()> {
-        Ok(())
+    fn send_mouse(&mut self, _event: MouseEvent, _body_row_offset: u16) -> Result<bool> {
+        Ok(false)
     }
 
     fn has_pending_update(&self) -> bool {

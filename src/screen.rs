@@ -71,11 +71,15 @@ impl Cell {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ScreenSnapshot {
     width: u16,
     height: u16,
     cells: Vec<Cell>,
+    cursor_x: u16,
+    cursor_y: u16,
+    cursor_visible: bool,
 }
 
 impl ScreenSnapshot {
@@ -85,6 +89,9 @@ impl ScreenSnapshot {
             width,
             height,
             cells: vec![Cell::blank(); len],
+            cursor_x: 0,
+            cursor_y: 0,
+            cursor_visible: false,
         }
     }
 
@@ -165,6 +172,20 @@ impl ScreenSnapshot {
         (0..self.height)
             .map(|y| self.plain_line(y).trim_end_matches(' ').to_string())
             .collect()
+    }
+
+    pub fn cursor_position(&self) -> (u16, u16) {
+        (self.cursor_x, self.cursor_y)
+    }
+
+    pub fn cursor_visible(&self) -> bool {
+        self.cursor_visible
+    }
+
+    pub fn set_cursor_state(&mut self, x: u16, y: u16, visible: bool) {
+        self.cursor_x = x.min(self.width.saturating_sub(1));
+        self.cursor_y = y.min(self.height.saturating_sub(1));
+        self.cursor_visible = visible;
     }
 
     pub fn plain_line(&self, y: u16) -> String {
@@ -326,5 +347,14 @@ mod tests {
         let after = ScreenSnapshot::from_text_lines(4, 2, &[""]);
 
         assert_eq!(after.changed_cell_count_since(Some(&before)), 0);
+    }
+
+    #[test]
+    fn stores_cursor_state() {
+        let mut snapshot = ScreenSnapshot::new(4, 3);
+        snapshot.set_cursor_state(2, 1, true);
+
+        assert_eq!(snapshot.cursor_position(), (2, 1));
+        assert!(snapshot.cursor_visible());
     }
 }

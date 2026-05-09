@@ -16,6 +16,7 @@ struct MockSource {
     next: usize,
     child_pause_supported: bool,
     child_paused: bool,
+    mouse_passthrough_enabled: bool,
     key_events: Arc<Mutex<Vec<KeyEvent>>>,
     mouse_events: Arc<Mutex<Vec<MouseEvent>>>,
 }
@@ -27,6 +28,19 @@ impl MockSource {
             next: 0,
             child_pause_supported: false,
             child_paused: false,
+            mouse_passthrough_enabled: true,
+            key_events: Arc::new(Mutex::new(Vec::new())),
+            mouse_events: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn without_mouse_passthrough(frames: Vec<CaptureFrame>) -> Self {
+        Self {
+            frames,
+            next: 0,
+            child_pause_supported: false,
+            child_paused: false,
+            mouse_passthrough_enabled: false,
             key_events: Arc::new(Mutex::new(Vec::new())),
             mouse_events: Arc::new(Mutex::new(Vec::new())),
         }
@@ -38,6 +52,7 @@ impl MockSource {
             next: 0,
             child_pause_supported: true,
             child_paused: false,
+            mouse_passthrough_enabled: true,
             key_events: Arc::new(Mutex::new(Vec::new())),
             mouse_events: Arc::new(Mutex::new(Vec::new())),
         }
@@ -65,9 +80,12 @@ impl FrameSource for MockSource {
         Ok(())
     }
 
-    fn send_mouse(&mut self, event: MouseEvent, _body_row_offset: u16) -> Result<()> {
+    fn send_mouse(&mut self, event: MouseEvent, _body_row_offset: u16) -> Result<bool> {
+        if !self.mouse_passthrough_enabled {
+            return Ok(false);
+        }
         self.mouse_events.lock().unwrap().push(event);
-        Ok(())
+        Ok(true)
     }
 
     fn toggle_child_pause(&mut self) -> Result<Option<bool>> {
@@ -595,6 +613,117 @@ fn mouse_passthrough_is_allowed_when_following_latest() {
 }
 
 #[test]
+fn mouse_input_is_not_recorded_when_child_does_not_accept_mouse() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::without_mouse_passthrough(vec![
+            frame("a", &["one"]),
+            frame("b", &["two"]),
+            frame("c", &["three"]),
+        ])),
+    )
+    .unwrap();
+
+    app.capture(20, 5).unwrap();
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: 1,
+        row: 3,
+        modifiers: KeyModifiers::NONE,
+    })
+    .unwrap();
+    app.capture(20, 5).unwrap();
+    app.capture(20, 5).unwrap();
+
+    let meta = app.history_metadata(1);
+    assert_eq!(meta.input_event_count_since_prev, 0);
+    assert!(meta.input_summary.is_empty());
+}
+
+#[test]
+fn broken_sgr_mouse_tail_is_not_forwarded_as_key_input() {
+    let source = MockSource::new(vec![frame("a", &["one"])]);
+    let key_events = source.key_events.clone();
+    let mut app = App::new(&test_cli(), Box::new(source)).unwrap();
+
+    app.ui.app_input_mode = true;
+    app.last_mouse_input = Some(Instant::now());
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    for ch in ['[', '<', '3', '5', ';', '3', '3', ';', '8', 'M'] {
+        app.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))
+            .unwrap();
+    }
+
+    assert!(key_events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn broken_sgr_mouse_tail_with_shifted_characters_is_not_forwarded() {
+    let source = MockSource::new(vec![frame("a", &["one"])]);
+    let key_events = source.key_events.clone();
+    let mut app = App::new(&test_cli(), Box::new(source)).unwrap();
+
+    app.ui.app_input_mode = true;
+    app.last_mouse_input = Some(Instant::now());
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('['), KeyModifiers::NONE))
+        .unwrap();
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('<'), KeyModifiers::SHIFT))
+        .unwrap();
+    for ch in ['3', '5', ';', '3', '3', ';', '8'] {
+        app.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))
+            .unwrap();
+    }
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('M'), KeyModifiers::SHIFT))
+        .unwrap();
+
+    assert!(key_events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn broken_legacy_mouse_tail_is_not_forwarded_as_key_input() {
+    let source = MockSource::new(vec![frame("a", &["one"])]);
+    let key_events = source.key_events.clone();
+    let mut app = App::new(&test_cli(), Box::new(source)).unwrap();
+
+    app.ui.app_input_mode = true;
+    app.last_mouse_input = Some(Instant::now());
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    for ch in ['[', 'M', '#', '!', '$'] {
+        app.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))
+            .unwrap();
+    }
+
+    assert!(key_events.lock().unwrap().is_empty());
+}
+
+#[test]
+fn ordinary_text_still_passes_through_without_recent_mouse_input() {
+    let source = MockSource::new(vec![frame("a", &["one"])]);
+    let key_events = source.key_events.clone();
+    let mut app = App::new(&test_cli(), Box::new(source)).unwrap();
+
+    app.ui.app_input_mode = true;
+
+    for ch in ['<', '3', '5'] {
+        app.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))
+            .unwrap();
+    }
+
+    let sent = key_events.lock().unwrap();
+    assert_eq!(sent.len(), 3);
+    assert_eq!(sent[0].code, KeyCode::Char('<'));
+    assert_eq!(sent[1].code, KeyCode::Char('3'));
+    assert_eq!(sent[2].code, KeyCode::Char('5'));
+}
+
+#[test]
 fn key_passthrough_is_blocked_when_not_following_latest() {
     let source = MockSource::new(vec![frame("a", &["one"])]);
     let key_events = source.key_events.clone();
@@ -962,6 +1091,44 @@ fn trimming_keeps_latest_selected_when_following_latest() {
     assert!(app.follow_latest);
     assert_eq!(app.selected_history_row(), 0);
     assert_eq!(app.current_label(), Some("0011"));
+}
+
+#[test]
+fn history_snapshots_preserve_cursor_state() {
+    let mut first = ScreenSnapshot::from_text_lines(20, 5, &["one"]);
+    first.set_cursor_state(3, 1, true);
+    let mut second = ScreenSnapshot::from_text_lines(20, 5, &["two"]);
+    second.set_cursor_state(5, 2, true);
+
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![
+            CaptureFrame {
+                label: "a".to_string(),
+                timestamp_unix_ms: 1,
+                snapshot: first,
+                raw_output: "one".to_string(),
+                changed: true,
+            },
+            CaptureFrame {
+                label: "b".to_string(),
+                timestamp_unix_ms: 2,
+                snapshot: second,
+                raw_output: "two".to_string(),
+                changed: true,
+            },
+        ])),
+    )
+    .unwrap();
+
+    app.capture(20, 5).unwrap();
+    app.capture(20, 5).unwrap();
+    app.follow_latest = false;
+    app.selected_index = 0;
+
+    let snapshot = app.selected_snapshot().unwrap();
+    assert_eq!(snapshot.cursor_position(), (3, 1));
+    assert!(snapshot.cursor_visible());
 }
 
 fn test_cli() -> Cli {

@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::aftercommand::AfterCommandRuntime;
 use crate::cli::{DiffModeArg, ScreenshotFormatArg};
@@ -221,6 +221,14 @@ impl ViewState {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum BrokenMouseEscape {
+    Esc,
+    Csi,
+    Sgr(String),
+    Legacy(u8),
+}
+
 pub(crate) struct UiState {
     pub(crate) show_history: bool,
     pub(crate) show_history_details: bool,
@@ -306,6 +314,7 @@ pub struct App {
     last_tick: Instant,
     last_mouse_input: Option<Instant>,
     last_mouse_scroll_input: Option<Instant>,
+    pending_mouse_escape: Option<BrokenMouseEscape>,
     next_frame_seq: u64,
     trace: TraceState,
     view: ViewState,
@@ -317,6 +326,8 @@ enum InputMode {
     Normal,
     Search,
 }
+
+const MOUSE_ESCAPE_GHOST_TIMEOUT: Duration = Duration::from_millis(150);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum FilterMode {
