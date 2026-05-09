@@ -32,7 +32,10 @@ pub(super) fn draw_header_line_one(frame: &mut Frame<'_>, app: &App, area: Rect)
     let command_line = Line::from(vec![
         Span::styled(" ", Style::default().bg(HEADER_BG)),
         Span::styled(
-            truncate_text(&command_text, usize::from(chunks[0].width).saturating_sub(1)),
+            truncate_text(
+                &command_text,
+                usize::from(chunks[0].width).saturating_sub(1),
+            ),
             Style::default().fg(Color::White).bg(HEADER_BG),
         ),
     ]);

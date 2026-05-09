@@ -127,9 +127,8 @@ impl PtyRunner {
             state,
             stats,
             dirty,
-            capture_hook: aftercommand.map(|hook| {
-                CaptureHook::new(shell, display_command(command), hook)
-            }),
+            capture_hook: aftercommand
+                .map(|hook| CaptureHook::new(shell, display_command(command), hook)),
             last_snapshot: None,
             last_size: (width.max(1), height.max(1)),
             child_paused: false,
@@ -324,9 +323,7 @@ fn start_reader_thread(
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(count) => {
-                    stats
-                        .bytes_read
-                        .fetch_add(count as u64, Ordering::Relaxed);
+                    stats.bytes_read.fetch_add(count as u64, Ordering::Relaxed);
                     stats.read_events.fetch_add(1, Ordering::Relaxed);
                     stats.record_bytes(&buffer[..count]);
                     handle_terminal_queries(
@@ -597,20 +594,12 @@ mod tests {
         }));
         let stats = Arc::new(PtyStats::new());
         let captured = Arc::new(Mutex::new(Vec::new()));
-        let writer = Arc::new(Mutex::new(
-            Box::new(TestWriter {
-                bytes: captured.clone(),
-            }) as Box<dyn Write + Send>
-        ));
+        let writer = Arc::new(Mutex::new(Box::new(TestWriter {
+            bytes: captured.clone(),
+        }) as Box<dyn Write + Send>));
         let mut control_tail = Vec::new();
 
-        handle_terminal_queries(
-            &state,
-            &stats,
-            &writer,
-            &mut control_tail,
-            b"\x1b[6n",
-        );
+        handle_terminal_queries(&state, &stats, &writer, &mut control_tail, b"\x1b[6n");
 
         assert_eq!(*captured.lock().unwrap(), b"\x1b[1;1R");
         assert_eq!(stats.dsr_responses.load(Ordering::Relaxed), 1);
