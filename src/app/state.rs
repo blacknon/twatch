@@ -13,6 +13,7 @@ impl App {
         let config = AppConfig::from_cli(cli, source.supports_child_pause())?;
         let mut app = Self {
             interval_secs: config.interval_secs,
+            debug: config.debug,
             paused: false,
             child_paused: false,
             child_pause_supported: config.child_pause_supported,
@@ -82,7 +83,11 @@ impl App {
     }
 
     pub fn source_debug_status(&self) -> Option<String> {
-        self.source.debug_status()
+        if self.debug {
+            self.source.debug_status()
+        } else {
+            None
+        }
     }
 
     pub fn screenshot_format(&self) -> crate::screenshot::ScreenshotFormat {

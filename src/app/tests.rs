@@ -992,6 +992,7 @@ fn test_cli() -> Cli {
         differences: DiffModeArg::None,
         limit: 500,
         checkpoint_interval: 12,
+        debug: false,
         command: vec!["mock".to_string()],
     }
 }

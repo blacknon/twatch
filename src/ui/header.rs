@@ -28,11 +28,7 @@ pub(super) fn draw_header_line_one(frame: &mut Frame<'_>, app: &App, area: Rect)
     } else {
         format!("Every {:>4.3}", app.interval_secs)
     };
-    let mut command_text = format!("{cadence} {}", app.command_display());
-    if let Some(debug_status) = app.source_debug_status() {
-        command_text.push_str(" | ");
-        command_text.push_str(&debug_status);
-    }
+    let command_text = format!("{cadence} {}", app.command_display());
     let command_line = Line::from(vec![
         Span::styled(" ", Style::default().bg(HEADER_BG)),
         Span::styled(
@@ -144,7 +140,6 @@ pub(super) fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect)
 
     let available_left = usize::from(area.width).saturating_sub(right_width.saturating_add(1));
     let resize_summary = app.selected_resize_summary();
-    let debug_status = app.source_debug_status();
     let left_text = fit_header_left(
         &filter_label,
         input_hint_long,
@@ -153,8 +148,7 @@ pub(super) fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect)
             .status_message
             .as_deref()
             .or(resize_summary.as_deref())
-            .or_else(|| app.selected_input_summary())
-            .or(debug_status.as_deref()),
+            .or_else(|| app.selected_input_summary()),
         available_left.saturating_sub(1),
     );
     let left = Line::from(vec![Span::styled(

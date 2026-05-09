@@ -89,42 +89,58 @@ pub(super) fn mouse_to_bytes(
     let mode_name = format!("{mode:?}");
     let encoding_name = format!("{encoding:?}");
 
-    let (code, sgr_suffix) = match event.kind {
-        MouseEventKind::Down(MouseButton::Left) => (0, 'M'),
-        MouseEventKind::Down(MouseButton::Middle) => (1, 'M'),
-        MouseEventKind::Down(MouseButton::Right) => (2, 'M'),
-        MouseEventKind::Up(MouseButton::Left)
-        | MouseEventKind::Up(MouseButton::Middle)
-        | MouseEventKind::Up(MouseButton::Right) => (3, 'm'),
-        MouseEventKind::Drag(MouseButton::Left) => {
-            if !supports_drag_tracking(&mode_name) {
-                return None;
-            }
-            (32, 'M')
+    let modifiers = mouse_modifier_bits(event.modifiers);
+
+    let (code, sgr_code, sgr_suffix) = match event.kind {
+        MouseEventKind::Down(button) => {
+            let base = mouse_button_code(button);
+            (base, base + modifiers, 'M')
         }
-        MouseEventKind::Drag(MouseButton::Middle) => {
-            if !supports_drag_tracking(&mode_name) {
-                return None;
-            }
-            (33, 'M')
+        MouseEventKind::Up(button) => {
+            let base = mouse_button_code(button);
+            (3, base + modifiers, 'm')
         }
-        MouseEventKind::Drag(MouseButton::Right) => {
+        MouseEventKind::Drag(button) => {
             if !supports_drag_tracking(&mode_name) {
                 return None;
             }
-            (34, 'M')
+            let base = mouse_button_code(button);
+            (base + 32 + modifiers, base + 32 + modifiers, 'M')
         }
         MouseEventKind::Moved => return None,
-        MouseEventKind::ScrollUp => (64, 'M'),
-        MouseEventKind::ScrollDown => (65, 'M'),
-        _ => return None,
+        MouseEventKind::ScrollUp => (64 + modifiers, 64 + modifiers, 'M'),
+        MouseEventKind::ScrollDown => (65 + modifiers, 65 + modifiers, 'M'),
+        MouseEventKind::ScrollLeft => (66 + modifiers, 66 + modifiers, 'M'),
+        MouseEventKind::ScrollRight => (67 + modifiers, 67 + modifiers, 'M'),
     };
 
     if encoding_name.contains("Sgr") {
-        return Some(format!("\x1b[<{};{};{}{}", code, x, y, sgr_suffix).into_bytes());
+        return Some(format!("\x1b[<{};{};{}{}", sgr_code, x, y, sgr_suffix).into_bytes());
     }
 
     encode_legacy_mouse(code, x, y)
+}
+
+fn mouse_button_code(button: MouseButton) -> u16 {
+    match button {
+        MouseButton::Left => 0,
+        MouseButton::Middle => 1,
+        MouseButton::Right => 2,
+    }
+}
+
+fn mouse_modifier_bits(modifiers: KeyModifiers) -> u16 {
+    let mut bits = 0u16;
+    if modifiers.contains(KeyModifiers::SHIFT) {
+        bits |= 4;
+    }
+    if modifiers.contains(KeyModifiers::ALT) {
+        bits |= 8;
+    }
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        bits |= 16;
+    }
+    bits
 }
 
 fn supports_drag_tracking(mode_name: &str) -> bool {
@@ -138,4 +154,46 @@ fn encode_legacy_mouse(code: u16, x: u16, y: u16) -> Option<Vec<u8>> {
     let cx = u8::try_from(x).ok()?.saturating_add(32);
     let cy = u8::try_from(y).ok()?.saturating_add(32);
     Some(vec![0x1b, b'[', b'M', cb, cx, cy])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mouse_to_bytes;
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+
+    #[test]
+    fn sgr_mouse_release_keeps_button_code() {
+        let bytes = mouse_to_bytes(
+            vt100::MouseProtocolMode::PressRelease,
+            vt100::MouseProtocolEncoding::Sgr,
+            MouseEvent {
+                kind: MouseEventKind::Up(MouseButton::Left),
+                column: 9,
+                row: 4,
+                modifiers: KeyModifiers::NONE,
+            },
+            2,
+        )
+        .unwrap();
+
+        assert_eq!(bytes, b"\x1b[<0;10;3m");
+    }
+
+    #[test]
+    fn sgr_mouse_press_includes_modifier_bits() {
+        let bytes = mouse_to_bytes(
+            vt100::MouseProtocolMode::PressRelease,
+            vt100::MouseProtocolEncoding::Sgr,
+            MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: 1,
+                row: 3,
+                modifiers: KeyModifiers::SHIFT | KeyModifiers::CONTROL,
+            },
+            2,
+        )
+        .unwrap();
+
+        assert_eq!(bytes, b"\x1b[<20;2;2M");
+    }
 }

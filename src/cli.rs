@@ -121,6 +121,9 @@ pub struct Cli {
     #[arg(long, default_value_t = 12)]
     pub checkpoint_interval: usize,
 
+    #[arg(long, help = "Show debug diagnostics in the interactive UI")]
+    pub debug: bool,
+
     #[arg()]
     pub command: Vec<String>,
 }

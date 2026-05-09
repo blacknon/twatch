@@ -12,17 +12,20 @@ use crate::screen::{Cell, ScreenSnapshot};
 use super::{BORDER_ACTIVE, DIFF_BG, DIFF_FG, PANEL_BG, SEARCH_BG};
 
 pub(super) fn draw_watch(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let watch_chunks = if app.ui.show_inspector {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(6)])
-            .split(area)
+    let debug_height = if app.debug && app.source_debug_status().is_some() {
+        1
     } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(0)])
-            .split(area)
+        0
     };
+    let inspector_height = if app.ui.show_inspector { 6 } else { 0 };
+    let watch_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(inspector_height),
+            Constraint::Length(debug_height),
+        ])
+        .split(area);
 
     let block = Block::default()
         .style(Style::default().bg(PANEL_BG))
@@ -60,6 +63,10 @@ pub(super) fn draw_watch(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 inspect_y,
             );
         }
+    }
+
+    if debug_height > 0 {
+        draw_debug_status(frame, watch_chunks[2], app.source_debug_status().as_deref());
     }
 }
 
@@ -256,6 +263,13 @@ fn draw_inspector(
                 .style(Style::default().bg(PANEL_BG)),
         )
         .style(Style::default().fg(Color::White).bg(PANEL_BG));
+    frame.render_widget(widget, area);
+}
+
+fn draw_debug_status(frame: &mut Frame<'_>, area: Rect, debug_status: Option<&str>) {
+    let line = debug_status.unwrap_or("");
+    let widget = Paragraph::new(Line::from(line.to_string()))
+        .style(Style::default().fg(Color::Indexed(244)).bg(PANEL_BG));
     frame.render_widget(widget, area);
 }
 
