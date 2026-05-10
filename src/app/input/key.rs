@@ -102,6 +102,8 @@ impl App {
             }
             (KeyCode::Char('i'), _) => {
                 if self.ui.focus == FocusPane::Watch && self.follow_latest {
+                    self.reset_watch_viewport();
+                    self.clear_live_scrollback_view();
                     self.ui.app_input_mode = true;
                 } else if self.ui.focus == FocusPane::Watch {
                     self.ui.status_message =

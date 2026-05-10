@@ -1,5 +1,11 @@
+use std::borrow::Cow;
+use std::fs;
 use std::io::Write;
+use std::panic::{self, PanicHookInfo};
+use std::path::PathBuf;
+use std::sync::Once;
 use std::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -19,6 +25,7 @@ fn main() -> Result<()> {
         return run_batch(cli);
     }
 
+    install_panic_hook();
     run_interactive(cli)
 }
 
@@ -33,11 +40,9 @@ fn run_interactive(cli: Cli) -> Result<()> {
     let app = App::new(&cli, source)?;
 
     execute!(std::io::stdout(), EnableMouseCapture)?;
+    let _terminal_guard = TerminalRestoreGuard;
     let terminal = ratatui::init();
-    let result = app.run(terminal);
-    ratatui::restore();
-    execute!(std::io::stdout(), DisableMouseCapture)?;
-    result
+    app.run(terminal)
 }
 
 fn run_batch(cli: Cli) -> Result<()> {
@@ -153,4 +158,92 @@ fn build_batch_aftercommand_runtime(cli: &Cli) -> Result<Option<AfterCommandRunt
         debounce_ms: cli.aftercommand_debounce_ms,
         timeout_ms: cli.aftercommand_timeout_ms,
     })))
+}
+
+struct TerminalRestoreGuard;
+
+impl Drop for TerminalRestoreGuard {
+    fn drop(&mut self) {
+        restore_terminal_state();
+    }
+}
+
+fn restore_terminal_state() {
+    ratatui::restore();
+    let _ = execute!(std::io::stdout(), DisableMouseCapture);
+}
+
+fn install_panic_hook() {
+    static PANIC_HOOK: Once = Once::new();
+
+    PANIC_HOOK.call_once(|| {
+        let previous = panic::take_hook();
+        panic::set_hook(Box::new(move |info| {
+            restore_terminal_state();
+            if let Ok(path) = write_panic_report(info) {
+                eprintln!("twatch panic report written to {}", path.display());
+            }
+            previous(info);
+        }));
+    });
+}
+
+fn write_panic_report(info: &PanicHookInfo<'_>) -> std::io::Result<PathBuf> {
+    let path = panic_report_path();
+    fs::write(&path, render_panic_report(info))?;
+    Ok(path)
+}
+
+fn panic_report_path() -> PathBuf {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    std::env::temp_dir().join(format!("twatch-panic-{timestamp}.log"))
+}
+
+fn render_panic_report(info: &PanicHookInfo<'_>) -> String {
+    let thread = std::thread::current();
+    let thread_name = thread.name().unwrap_or("unnamed");
+    let payload = panic_payload(info);
+    let location = info
+        .location()
+        .map(|location| {
+            format!(
+                "{}:{}:{}",
+                location.file(),
+                location.line(),
+                location.column()
+            )
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+
+    format!(
+        "twatch panic report\nthread: {thread_name}\nlocation: {location}\npayload: {payload}\n"
+    )
+}
+
+fn panic_payload<'a>(info: &'a PanicHookInfo<'a>) -> Cow<'a, str> {
+    if let Some(payload) = info.payload().downcast_ref::<&str>() {
+        Cow::Borrowed(payload)
+    } else if let Some(payload) = info.payload().downcast_ref::<String>() {
+        Cow::Borrowed(payload.as_str())
+    } else {
+        Cow::Borrowed("non-string panic payload")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::panic_report_path;
+
+    #[test]
+    fn panic_report_path_uses_temp_dir() {
+        let path = panic_report_path();
+        assert!(path.starts_with(std::env::temp_dir()));
+        assert!(
+            path.file_name()
+                .is_some_and(|name| name.to_string_lossy().starts_with("twatch-panic-"))
+        );
+    }
 }

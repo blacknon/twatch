@@ -315,6 +315,8 @@ pub struct App {
     last_mouse_input: Option<Instant>,
     last_mouse_scroll_input: Option<Instant>,
     pending_mouse_escape: Option<BrokenMouseEscape>,
+    live_scrollback_offset: usize,
+    live_scrollback_snapshot: Option<ScreenSnapshot>,
     next_frame_seq: u64,
     trace: TraceState,
     view: ViewState,

@@ -137,12 +137,24 @@ impl PtyRunner {
     }
 
     fn snapshot(&self) -> ScreenSnapshot {
-        let state = self.state.read().expect("terminal state poisoned");
+        self.snapshot_with_scrollback(None)
+    }
+
+    fn snapshot_with_scrollback(&self, scrollback_offset: Option<usize>) -> ScreenSnapshot {
+        let mut state = self.state.write().expect("terminal state poisoned");
+        let previous_scrollback = state.parser.screen().scrollback();
+        if let Some(offset) = scrollback_offset {
+            let (rows, _) = state.parser.screen().size();
+            state
+                .parser
+                .set_scrollback(safe_scrollback_offset(offset, rows));
+        }
         let screen = state.parser.screen();
         let (rows, cols) = screen.size();
         let mut snapshot = ScreenSnapshot::new(cols, rows);
         let (cursor_row, cursor_col) = screen.cursor_position();
         snapshot.set_cursor_state(cursor_col, cursor_row, !screen.hide_cursor());
+        snapshot.set_screen_mode(screen.alternate_screen(), screen.scrollback());
 
         for row in 0..rows {
             for col in 0..cols {
@@ -176,6 +188,10 @@ impl PtyRunner {
             }
         }
 
+        if scrollback_offset.is_some() {
+            state.parser.set_scrollback(previous_scrollback);
+        }
+
         snapshot
     }
 
@@ -184,6 +200,10 @@ impl PtyRunner {
             .as_ref()
             .map_or(Ok(()), |hook| hook.maybe_run(output, changed))
     }
+}
+
+fn safe_scrollback_offset(requested: usize, rows: u16) -> usize {
+    requested.min(usize::from(rows))
 }
 
 impl FrameSource for PtyRunner {
@@ -207,6 +227,16 @@ impl FrameSource for PtyRunner {
             raw_output,
             changed,
         })
+    }
+
+    fn view_snapshot(
+        &mut self,
+        width: u16,
+        height: u16,
+        scrollback_offset: usize,
+    ) -> Result<Option<ScreenSnapshot>> {
+        self.resize(width, height)?;
+        Ok(Some(self.snapshot_with_scrollback(Some(scrollback_offset))))
     }
 
     fn resize(&mut self, width: u16, height: u16) -> Result<()> {
@@ -495,7 +525,7 @@ mod tests {
 
     use super::{
         PtyStats, TerminalState, build_command, child_term_env, handle_terminal_queries,
-        is_transient_pty_read_error,
+        is_transient_pty_read_error, safe_scrollback_offset,
     };
 
     fn argv(builder: portable_pty::CommandBuilder) -> Vec<String> {
@@ -605,5 +635,13 @@ mod tests {
 
         assert_eq!(*captured.lock().unwrap(), b"\x1b[1;1R");
         assert_eq!(stats.dsr_responses.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn scrollback_offset_is_clamped_to_visible_rows() {
+        assert_eq!(safe_scrollback_offset(0, 24), 0);
+        assert_eq!(safe_scrollback_offset(12, 24), 12);
+        assert_eq!(safe_scrollback_offset(24, 24), 24);
+        assert_eq!(safe_scrollback_offset(10_000, 24), 24);
     }
 }

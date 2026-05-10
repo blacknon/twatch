@@ -28,6 +28,15 @@ pub struct CaptureFrame {
 
 pub trait FrameSource {
     fn capture(&mut self, width: u16, height: u16) -> Result<CaptureFrame>;
+    fn view_snapshot(
+        &mut self,
+        width: u16,
+        height: u16,
+        scrollback_offset: usize,
+    ) -> Result<Option<ScreenSnapshot>> {
+        let _ = (width, height, scrollback_offset);
+        Ok(None)
+    }
     fn resize(&mut self, width: u16, height: u16) -> Result<()>;
     fn send_key(&mut self, key: KeyEvent) -> Result<()>;
     fn send_mouse(&mut self, event: MouseEvent, body_row_offset: u16) -> Result<bool>;

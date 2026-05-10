@@ -128,6 +128,25 @@ Options:
 - Mouse passthrough is enabled only while viewing `latest`
 - `p` pauses `twatch` capture, not the child process
 - `Shift+P` pauses or resumes the child process itself
+- Panic reports are written to `/tmp/twatch-panic-*.log`
+
+## Long-Run Checks
+
+Long sessions are worth testing separately from short interactive checks.
+
+Suggested matrix:
+
+- `zsh -> vim -> idle -> :q`
+- `zsh -> less -> idle -> q`
+- `zsh -> btm -> idle -> q`
+- `tmux -> zsh -> vim -> idle -> :q`
+- `resize terminal while idle`
+- `mouse on/off apps before exit`
+
+Quick helpers:
+
+- Manual overnight-style soak: `tools/soak_vim.sh [seconds]`
+- Short automated smoke tape: `vhs img/soak_vim.tape`
 
 ## Example
 

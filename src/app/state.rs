@@ -47,6 +47,8 @@ impl App {
             last_mouse_input: None,
             last_mouse_scroll_input: None,
             pending_mouse_escape: None,
+            live_scrollback_offset: 0,
+            live_scrollback_snapshot: None,
             next_frame_seq: 1,
             trace: super::TraceState::new(),
             view: super::ViewState::new(),
@@ -89,6 +91,16 @@ impl App {
         } else {
             None
         }
+    }
+
+    pub fn selected_snapshot_is_alternate_screen(&self) -> bool {
+        self.selected_snapshot()
+            .map(|snapshot| snapshot.alternate_screen())
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn should_render_terminal_cursor(&self) -> bool {
+        self.follow_latest && self.live_scrollback_offset == 0 && self.ui.watch_scroll == 0
     }
 
     pub fn screenshot_format(&self) -> crate::screenshot::ScreenshotFormat {

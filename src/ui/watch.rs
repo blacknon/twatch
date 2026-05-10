@@ -285,6 +285,7 @@ fn watch_cursor_position(
     area: Rect,
 ) -> Option<Position> {
     if !snapshot.cursor_visible()
+        || !app.should_render_terminal_cursor()
         || app.ui.show_help
         || app.ui.show_exit_confirm
         || app.is_search_mode()
