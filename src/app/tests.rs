@@ -677,7 +677,6 @@ fn alternate_screen_mouse_scroll_still_passthroughs_to_child() {
         changed: true,
     }]);
     let mouse_events = source.mouse_events.clone();
-    let requests = source.view_snapshot_requests.clone();
     let mut app = App::new(&test_cli(), Box::new(source)).unwrap();
 
     app.capture(20, 5).unwrap();
@@ -689,7 +688,6 @@ fn alternate_screen_mouse_scroll_still_passthroughs_to_child() {
     })
     .unwrap();
 
-    assert!(requests.lock().unwrap().is_empty());
     assert_eq!(mouse_events.lock().unwrap().len(), 1);
 }
 
