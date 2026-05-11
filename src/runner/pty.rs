@@ -144,10 +144,7 @@ impl PtyRunner {
         let mut state = self.state.write().expect("terminal state poisoned");
         let previous_scrollback = state.parser.screen().scrollback();
         if let Some(offset) = scrollback_offset {
-            let (rows, _) = state.parser.screen().size();
-            state
-                .parser
-                .set_scrollback(safe_scrollback_offset(offset, rows));
+            state.parser.screen_mut().set_scrollback(offset);
         }
         let screen = state.parser.screen();
         let (rows, cols) = screen.size();
@@ -168,13 +165,13 @@ impl PtyRunner {
                 let symbol = if cell.has_contents() {
                     cell.contents()
                 } else {
-                    " ".to_string()
+                    " "
                 };
                 snapshot.set_cell(
                     col,
                     row,
                     Cell {
-                        symbol,
+                        symbol: symbol.to_string(),
                         style: Style {
                             fg: map_color(cell.fgcolor()),
                             bg: map_color(cell.bgcolor()),
@@ -189,7 +186,10 @@ impl PtyRunner {
         }
 
         if scrollback_offset.is_some() {
-            state.parser.set_scrollback(previous_scrollback);
+            state
+                .parser
+                .screen_mut()
+                .set_scrollback(previous_scrollback);
         }
 
         snapshot
@@ -200,10 +200,6 @@ impl PtyRunner {
             .as_ref()
             .map_or(Ok(()), |hook| hook.maybe_run(output, changed))
     }
-}
-
-fn safe_scrollback_offset(requested: usize, rows: u16) -> usize {
-    requested.min(usize::from(rows))
 }
 
 impl FrameSource for PtyRunner {
@@ -248,7 +244,7 @@ impl FrameSource for PtyRunner {
             .resize(pty_size(size.0, size.1))
             .context("failed to resize PTY")?;
         let mut state = self.state.write().expect("terminal state poisoned");
-        state.parser.set_size(size.1, size.0);
+        state.parser.screen_mut().set_size(size.1, size.0);
         self.last_size = size;
         self.dirty.store(true, Ordering::Relaxed);
         Ok(())
@@ -525,7 +521,7 @@ mod tests {
 
     use super::{
         PtyStats, TerminalState, build_command, child_term_env, handle_terminal_queries,
-        is_transient_pty_read_error, safe_scrollback_offset,
+        is_transient_pty_read_error,
     };
 
     fn argv(builder: portable_pty::CommandBuilder) -> Vec<String> {
@@ -638,10 +634,19 @@ mod tests {
     }
 
     #[test]
-    fn scrollback_offset_is_clamped_to_visible_rows() {
-        assert_eq!(safe_scrollback_offset(0, 24), 0);
-        assert_eq!(safe_scrollback_offset(12, 24), 12);
-        assert_eq!(safe_scrollback_offset(24, 24), 24);
-        assert_eq!(safe_scrollback_offset(10_000, 24), 24);
+    fn vt100_scrollback_supports_offsets_beyond_visible_rows() {
+        let mut parser = vt100::Parser::new(3, 8, 32);
+        parser.process(b"1\n2\n3\n4\n5\n6\n7\n8\n");
+
+        let visible_now: Vec<String> = parser.screen().rows(0, 8).collect();
+        assert_eq!(visible_now.len(), 3);
+
+        parser.screen_mut().set_scrollback(6);
+        let older_rows: Vec<String> = parser.screen().rows(0, 8).collect();
+
+        assert_eq!(parser.screen().scrollback(), 6);
+        assert_eq!(older_rows.len(), 3);
+        assert_ne!(older_rows, visible_now);
+        assert!(older_rows.iter().any(|row| row.contains('2')));
     }
 }
