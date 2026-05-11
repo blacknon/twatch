@@ -15,6 +15,10 @@ It is aimed at debugging terminal UIs, not only recording them.
 
 <img src="./img/demo_tui.gif" width=720>
 
+#### TUI wrap mode (using zsh)
+
+<img src="./img/demo_tui_zsh.gif" width=720>
+
 #### TUI to Batch mode
 
 <img src="./img/demo_cli.gif" width=720>
@@ -125,28 +129,11 @@ Options:
 
 ### Notes
 
-- Mouse passthrough is enabled only while viewing `latest`
-- `p` pauses `twatch` capture, not the child process
-- `Shift+P` pauses or resumes the child process itself
-- Panic reports are written to `/tmp/twatch-panic-*.log`
-
-## Long-Run Checks
-
-Long sessions are worth testing separately from short interactive checks.
-
-Suggested matrix:
-
-- `zsh -> vim -> idle -> :q`
-- `zsh -> less -> idle -> q`
-- `zsh -> btm -> idle -> q`
-- `tmux -> zsh -> vim -> idle -> :q`
-- `resize terminal while idle`
-- `mouse on/off apps before exit`
-
-Quick helpers:
-
-- Manual overnight-style soak: `tools/soak_vim.sh [seconds]`
-- Short automated smoke tape: `vhs img/soak_vim.tape`
+- Mouse support is implemented, but behavior still depends on the child TUI and
+  the mouse protocol it enables.
+- Snapshot save defaults to `/tmp`, and text output keeps ANSI color escapes.
+- `p` pauses `twatch` screen capture and history updates.
+- `Shift+P` suspends or resumes the wrapped child process.
 
 ## Example
 
@@ -302,11 +289,3 @@ These projects explore similar terminal wrapping and history-oriented workflows.
 - [hwatch](https://github.com/blacknon/hwatch): the history-focused watch tool that informs the search, diff, and navigation experience.
 - [baeru](https://github.com/blacknon/baeru): an earlier TUI wrapper project based on the same core idea.
 - [twrap](https://github.com/blacknon/twrap): the terminal wrapper foundation that inspired the PTY capture and replay model here.
-
-## Notes
-
-- Mouse support is implemented, but behavior still depends on the child TUI and
-  the mouse protocol it enables.
-- Snapshot save defaults to `/tmp`, and text output keeps ANSI color escapes.
-- `p` pauses `twatch` screen capture and history updates.
-- `Shift+P` suspends or resumes the wrapped child process.
