@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.3
+
+- Improve Windows compatibility for wrapped TUIs by fixing PTY startup, direct process spawning, terminal query handling, and repeated key/mouse input behavior
+- Preserve cursor state in captured snapshots and history, and only render the terminal cursor when the live viewport is aligned with current output
+- Add safer panic recovery with terminal restore and panic log output so mouse capture and terminal state do not stay broken after crashes
+- Refine shell and main-screen behavior with automatic alternate-screen detection, lightweight watch scrolling in history, and better guardrails around mouse escape leakage
+- Upgrade terminal rendering dependencies to `ratatui 0.30` and `vt100 0.16.2`, removing the need for local vendoring while enabling safer deep scrollback handling
+- Add Docker-based demo support for recording `twatch -L 5000 -- zsh` sessions with `vhs`
+
+This release focuses on stability and day-to-day usability across real terminal workflows.
+It strengthens Windows behavior, improves shell-oriented sessions, and modernizes the terminal stack underneath `twatch`.
+
 ## 0.1.2
 
 - Add replay mode for saved JSONL traces with read-only history browsing
