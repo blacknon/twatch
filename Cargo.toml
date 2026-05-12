@@ -30,4 +30,10 @@ vt100 = "0.16.2"
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["handleapi", "jobapi2", "processthreadsapi", "tlhelp32", "winnt"] }
+winapi = { version = "0.3", features = [
+    "handleapi",
+    "jobapi2",
+    "processthreadsapi",
+    "tlhelp32",
+    "winnt",
+] }
