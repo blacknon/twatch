@@ -10,6 +10,13 @@ use crate::screenshot::save_snapshot;
 
 impl App {
     pub fn capture(&mut self, width: u16, height: u16) -> Result<()> {
+        let previous_screen_state = self.current_snapshot.as_ref().map(|current| {
+            (
+                current.alternate_screen(),
+                current.width(),
+                current.height(),
+            )
+        });
         let CaptureFrame {
             label,
             timestamp_unix_ms,
@@ -51,6 +58,27 @@ impl App {
 
         self.archive_current_snapshot()?;
         self.set_current_snapshot(snapshot, metadata);
+        if self.follow_latest {
+            let current_screen_state = self.current_snapshot.as_ref().map(|current| {
+                (
+                    current.alternate_screen(),
+                    current.width(),
+                    current.height(),
+                )
+            });
+            if previous_screen_state != current_screen_state {
+                self.reset_watch_viewport();
+            }
+        }
+        if self
+            .current_snapshot
+            .as_ref()
+            .is_some_and(ScreenSnapshot::alternate_screen)
+        {
+            self.clear_live_scrollback_view();
+        } else if self.live_scrollback_offset > 0 {
+            self.refresh_live_scrollback_view()?;
+        }
         self.trace.pending_input_events.clear();
         self.trace.pending_resize_event = None;
 

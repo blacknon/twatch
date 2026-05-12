@@ -13,6 +13,7 @@ impl App {
         let config = AppConfig::from_cli(cli, source.supports_child_pause())?;
         let mut app = Self {
             interval_secs: config.interval_secs,
+            debug: config.debug,
             paused: false,
             child_paused: false,
             child_pause_supported: config.child_pause_supported,
@@ -45,6 +46,9 @@ impl App {
             last_tick: Instant::now(),
             last_mouse_input: None,
             last_mouse_scroll_input: None,
+            pending_mouse_escape: None,
+            live_scrollback_offset: 0,
+            live_scrollback_snapshot: None,
             next_frame_seq: 1,
             trace: super::TraceState::new(),
             view: super::ViewState::new(),
@@ -79,6 +83,30 @@ impl App {
 
     pub fn command_display(&self) -> &str {
         &self.command_display
+    }
+
+    pub fn source_debug_status(&self) -> Option<String> {
+        if self.debug {
+            self.source.debug_status()
+        } else {
+            None
+        }
+    }
+
+    pub fn selected_snapshot_is_alternate_screen(&self) -> bool {
+        self.selected_snapshot()
+            .map(|snapshot| snapshot.alternate_screen())
+            .unwrap_or(false)
+    }
+
+    pub fn selected_snapshot_has_mouse_reporting(&self) -> bool {
+        self.selected_snapshot()
+            .map(|snapshot| snapshot.mouse_reporting())
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn should_render_terminal_cursor(&self) -> bool {
+        self.follow_latest && self.live_scrollback_offset == 0 && self.ui.watch_scroll == 0
     }
 
     pub fn screenshot_format(&self) -> crate::screenshot::ScreenshotFormat {

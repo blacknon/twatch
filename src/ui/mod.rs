@@ -18,7 +18,6 @@ pub(super) const SEARCH_BG: Color = Color::Indexed(220);
 pub(super) const DIFF_BG: Color = Color::Rgb(238, 238, 238);
 pub(super) const DIFF_FG: Color = Color::Black;
 pub(super) const SELECTION_BG: Color = Color::Indexed(24);
-pub(super) const COMMAND_FG: Color = Color::Indexed(47);
 pub(super) const COMMAND_ACCENT: Color = Color::Indexed(51);
 pub(super) const TIMESTAMP_FG: Color = Color::Indexed(51);
 pub(super) const BADGE_TEXT: Color = Color::Black;

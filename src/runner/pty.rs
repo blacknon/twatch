@@ -1,4 +1,5 @@
 use std::io::{Read, Write};
+use std::sync::atomic::AtomicU64;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, RwLock};
@@ -8,6 +9,8 @@ use anyhow::{Context, Result};
 use crossterm::event::{KeyEvent, MouseEvent};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
+#[cfg(windows)]
+use crate::cli::default_shell;
 use crate::process_control;
 use crate::runner::capture_hook::CaptureHook;
 use crate::runner::encode::{key_to_bytes, mouse_to_bytes};
@@ -21,6 +24,7 @@ pub struct PtyRunner {
     writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Box<dyn Child + Send + Sync>,
     state: Arc<RwLock<TerminalState>>,
+    stats: Arc<PtyStats>,
     dirty: Arc<AtomicBool>,
     capture_hook: Option<CaptureHook>,
     last_snapshot: Option<ScreenSnapshot>,
@@ -33,10 +37,49 @@ struct TerminalState {
     parser: vt100::Parser,
 }
 
+struct PtyStats {
+    bytes_read: AtomicU64,
+    read_events: AtomicU64,
+    dsr_responses: AtomicU64,
+    first_bytes: Mutex<Vec<u8>>,
+}
+
+impl PtyStats {
+    fn new() -> Self {
+        Self {
+            bytes_read: AtomicU64::new(0),
+            read_events: AtomicU64::new(0),
+            dsr_responses: AtomicU64::new(0),
+            first_bytes: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn record_bytes(&self, bytes: &[u8]) {
+        let mut first = self.first_bytes.lock().expect("pty stats poisoned");
+        if first.len() >= 16 {
+            return;
+        }
+        let remaining = 16usize.saturating_sub(first.len());
+        first.extend(bytes.iter().take(remaining).copied());
+    }
+
+    fn preview(&self) -> String {
+        let first = self.first_bytes.lock().expect("pty stats poisoned");
+        if first.is_empty() {
+            return "none".to_string();
+        }
+        first
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
 impl PtyRunner {
     pub fn spawn(
         shell: &str,
-        command: String,
+        command: &[String],
         aftercommand: Option<String>,
         width: u16,
         height: u16,
@@ -44,8 +87,8 @@ impl PtyRunner {
         let size = pty_size(width, height);
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(size).context("failed to open PTY")?;
-        let mut command_builder = build_command(shell, &command)?;
-        command_builder.env("TERM", "xterm-256color");
+        let mut command_builder = build_command(shell, command)?;
+        command_builder.env("TERM", child_term_env());
         let child = pair
             .slave
             .spawn_command(command_builder)
@@ -60,21 +103,32 @@ impl PtyRunner {
             .master
             .take_writer()
             .context("failed to take PTY writer")?;
+        let writer = Arc::new(Mutex::new(writer));
 
         let state = Arc::new(RwLock::new(TerminalState {
             parser: vt100::Parser::new(height.max(1), width.max(1), SCROLLBACK_LINES),
         }));
+        let stats = Arc::new(PtyStats::new());
         let dirty = Arc::new(AtomicBool::new(true));
         let (update_tx, update_rx) = mpsc::sync_channel(2);
-        start_reader_thread(state.clone(), dirty.clone(), reader, update_tx);
+        start_reader_thread(
+            state.clone(),
+            stats.clone(),
+            dirty.clone(),
+            reader,
+            writer.clone(),
+            update_tx,
+        );
 
         Ok(Self {
             master: pair.master,
-            writer: Arc::new(Mutex::new(writer)),
+            writer,
             child,
             state,
+            stats,
             dirty,
-            capture_hook: aftercommand.map(|hook| CaptureHook::new(shell, command.clone(), hook)),
+            capture_hook: aftercommand
+                .map(|hook| CaptureHook::new(shell, display_command(command), hook)),
             last_snapshot: None,
             last_size: (width.max(1), height.max(1)),
             child_paused: false,
@@ -83,10 +137,25 @@ impl PtyRunner {
     }
 
     fn snapshot(&self) -> ScreenSnapshot {
-        let state = self.state.read().expect("terminal state poisoned");
+        self.snapshot_with_scrollback(None)
+    }
+
+    fn snapshot_with_scrollback(&self, scrollback_offset: Option<usize>) -> ScreenSnapshot {
+        let mut state = self.state.write().expect("terminal state poisoned");
+        let previous_scrollback = state.parser.screen().scrollback();
+        if let Some(offset) = scrollback_offset {
+            state.parser.screen_mut().set_scrollback(offset);
+        }
         let screen = state.parser.screen();
         let (rows, cols) = screen.size();
         let mut snapshot = ScreenSnapshot::new(cols, rows);
+        let (cursor_row, cursor_col) = screen.cursor_position();
+        snapshot.set_cursor_state(cursor_col, cursor_row, !screen.hide_cursor());
+        snapshot.set_screen_mode(screen.alternate_screen(), screen.scrollback());
+        snapshot.set_mouse_reporting(!matches!(
+            screen.mouse_protocol_mode(),
+            vt100::MouseProtocolMode::None
+        ));
 
         for row in 0..rows {
             for col in 0..cols {
@@ -100,13 +169,13 @@ impl PtyRunner {
                 let symbol = if cell.has_contents() {
                     cell.contents()
                 } else {
-                    " ".to_string()
+                    " "
                 };
                 snapshot.set_cell(
                     col,
                     row,
                     Cell {
-                        symbol,
+                        symbol: symbol.to_string(),
                         style: Style {
                             fg: map_color(cell.fgcolor()),
                             bg: map_color(cell.bgcolor()),
@@ -118,6 +187,13 @@ impl PtyRunner {
                     },
                 );
             }
+        }
+
+        if scrollback_offset.is_some() {
+            state
+                .parser
+                .screen_mut()
+                .set_scrollback(previous_scrollback);
         }
 
         snapshot
@@ -153,6 +229,16 @@ impl FrameSource for PtyRunner {
         })
     }
 
+    fn view_snapshot(
+        &mut self,
+        width: u16,
+        height: u16,
+        scrollback_offset: usize,
+    ) -> Result<Option<ScreenSnapshot>> {
+        self.resize(width, height)?;
+        Ok(Some(self.snapshot_with_scrollback(Some(scrollback_offset))))
+    }
+
     fn resize(&mut self, width: u16, height: u16) -> Result<()> {
         let size = (width.max(1), height.max(1));
         if self.last_size == size {
@@ -162,7 +248,7 @@ impl FrameSource for PtyRunner {
             .resize(pty_size(size.0, size.1))
             .context("failed to resize PTY")?;
         let mut state = self.state.write().expect("terminal state poisoned");
-        state.parser.set_size(size.1, size.0);
+        state.parser.screen_mut().set_size(size.1, size.0);
         self.last_size = size;
         self.dirty.store(true, Ordering::Relaxed);
         Ok(())
@@ -184,7 +270,7 @@ impl FrameSource for PtyRunner {
         Ok(())
     }
 
-    fn send_mouse(&mut self, event: MouseEvent, body_row_offset: u16) -> Result<()> {
+    fn send_mouse(&mut self, event: MouseEvent, body_row_offset: u16) -> Result<bool> {
         let encoded = {
             let state = self.state.read().expect("terminal state poisoned");
             mouse_to_bytes(
@@ -195,14 +281,14 @@ impl FrameSource for PtyRunner {
             )
         };
         let Some(bytes) = encoded else {
-            return Ok(());
+            return Ok(false);
         };
         let mut writer = self.writer.lock().expect("writer poisoned");
         writer
             .write_all(&bytes)
             .context("failed to write mouse event to PTY")?;
         writer.flush().ok();
-        Ok(())
+        Ok(true)
     }
 
     fn toggle_child_pause(&mut self) -> Result<Option<bool>> {
@@ -221,6 +307,16 @@ impl FrameSource for PtyRunner {
 
     fn supports_child_pause(&self) -> bool {
         true
+    }
+
+    fn debug_status(&self) -> Option<String> {
+        Some(format!(
+            "pty rx={} ev={} dsr={} first={}",
+            self.stats.bytes_read.load(Ordering::Relaxed),
+            self.stats.read_events.load(Ordering::Relaxed),
+            self.stats.dsr_responses.load(Ordering::Relaxed),
+            self.stats.preview(),
+        ))
     }
 
     fn terminate(&mut self) -> Result<()> {
@@ -246,29 +342,108 @@ impl FrameSource for PtyRunner {
 
 fn start_reader_thread(
     state: Arc<RwLock<TerminalState>>,
+    stats: Arc<PtyStats>,
     dirty: Arc<AtomicBool>,
     mut reader: Box<dyn Read + Send>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     update_tx: SyncSender<SourceEvent>,
 ) {
     thread::spawn(move || {
         let mut buffer = [0u8; 8192];
+        let mut control_tail = Vec::new();
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(count) => {
-                    let mut state = state.write().expect("terminal state poisoned");
-                    state.parser.process(&buffer[..count]);
+                    stats.bytes_read.fetch_add(count as u64, Ordering::Relaxed);
+                    stats.read_events.fetch_add(1, Ordering::Relaxed);
+                    stats.record_bytes(&buffer[..count]);
+                    process_reader_bytes(
+                        &state,
+                        &stats,
+                        &writer,
+                        &mut control_tail,
+                        &buffer[..count],
+                    );
                     dirty.store(true, Ordering::Relaxed);
                     match update_tx.try_send(SourceEvent::Updated) {
                         Ok(()) | Err(TrySendError::Full(_)) => {}
                         Err(TrySendError::Disconnected(_)) => break,
                     }
                 }
-                Err(_) => break,
+                Err(err) if is_transient_pty_read_error(&err) => {
+                    thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(err) => {
+                    let _ = update_tx.send(SourceEvent::ClosedWithError(err.to_string()));
+                    return;
+                }
             }
         }
         let _ = update_tx.send(SourceEvent::Closed);
     });
+}
+
+fn process_reader_bytes(
+    state: &Arc<RwLock<TerminalState>>,
+    stats: &Arc<PtyStats>,
+    writer: &Arc<Mutex<Box<dyn Write + Send>>>,
+    control_tail: &mut Vec<u8>,
+    bytes: &[u8],
+) {
+    let mut scan = Vec::with_capacity(control_tail.len() + bytes.len());
+    scan.extend_from_slice(control_tail);
+    scan.extend_from_slice(bytes);
+
+    let mut processed = 0usize;
+    let mut index = 0usize;
+    while index + 4 <= scan.len() {
+        if scan[index..].starts_with(b"\x1b[6n") {
+            process_parser_bytes(state, &scan[processed..index]);
+            let (row, col) = {
+                let state = state.read().expect("terminal state poisoned");
+                state.parser.screen().cursor_position()
+            };
+            let response = format!("\x1b[{};{}R", row.saturating_add(1), col.saturating_add(1));
+            if let Ok(mut writer) = writer.lock() {
+                if writer.write_all(response.as_bytes()).is_ok() {
+                    let _ = writer.flush();
+                    stats.dsr_responses.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            process_parser_bytes(state, &scan[index..index + 4]);
+            index += 4;
+            processed = index;
+        } else {
+            index += 1;
+        }
+    }
+
+    let keep = dsr_prefix_tail_len(&scan[processed..]);
+    let stable_end = scan.len().saturating_sub(keep);
+    process_parser_bytes(state, &scan[processed..stable_end]);
+
+    control_tail.clear();
+    control_tail.extend_from_slice(&scan[stable_end..]);
+}
+
+fn process_parser_bytes(state: &Arc<RwLock<TerminalState>>, bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    let mut state = state.write().expect("terminal state poisoned");
+    state.parser.process(bytes);
+}
+
+fn dsr_prefix_tail_len(bytes: &[u8]) -> usize {
+    const DSR: &[u8] = b"\x1b[6n";
+    let max_len = bytes.len().min(DSR.len().saturating_sub(1));
+    for len in (1..=max_len).rev() {
+        if bytes[bytes.len() - len..] == DSR[..len] {
+            return len;
+        }
+    }
+    0
 }
 
 fn is_child_exit_error(err: &std::io::Error) -> bool {
@@ -283,24 +458,70 @@ fn is_child_exit_error(err: &std::io::Error) -> bool {
     ) || matches!(err.raw_os_error(), Some(3) | Some(5))
 }
 
-fn build_command(shell: &str, command: &str) -> Result<CommandBuilder> {
-    let parts = shell_words::split(shell).context("failed to parse shell command")?;
-    if parts.is_empty() {
-        return Ok(CommandBuilder::new(command));
+fn is_transient_pty_read_error(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::Interrupted
+            | std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::TimedOut
+    )
+}
+
+fn build_command(shell: &str, command: &[String]) -> Result<CommandBuilder> {
+    if command.is_empty() {
+        anyhow::bail!("command cannot be empty");
     }
 
+    if should_spawn_direct(shell) {
+        let mut builder = CommandBuilder::new(&command[0]);
+        builder.args(command.iter().skip(1));
+        return Ok(builder);
+    }
+
+    let parts = shell_words::split(shell).context("failed to parse shell command")?;
+    if parts.is_empty() {
+        let mut builder = CommandBuilder::new(&command[0]);
+        builder.args(command.iter().skip(1));
+        return Ok(builder);
+    }
+
+    let command_text = display_command(command);
     let mut builder = CommandBuilder::new(&parts[0]);
     if shell.contains("{COMMAND}") {
         for arg in parts.iter().skip(1) {
-            builder.arg(arg.replace("{COMMAND}", command));
+            builder.arg(arg.replace("{COMMAND}", &command_text));
         }
     } else {
         for arg in parts.iter().skip(1) {
             builder.arg(arg);
         }
-        builder.arg(command);
+        builder.arg(command_text);
     }
     Ok(builder)
+}
+
+#[cfg(windows)]
+fn should_spawn_direct(shell: &str) -> bool {
+    shell_words::split(shell).ok() == shell_words::split(&default_shell()).ok()
+}
+
+#[cfg(not(windows))]
+fn should_spawn_direct(_shell: &str) -> bool {
+    false
+}
+
+fn display_command(command: &[String]) -> String {
+    command.join(" ")
+}
+
+#[cfg(windows)]
+fn child_term_env() -> &'static str {
+    "xterm"
+}
+
+#[cfg(not(windows))]
+fn child_term_env() -> &'static str {
+    "xterm-256color"
 }
 
 fn map_color(color: vt100::Color) -> TermColor {
@@ -317,5 +538,176 @@ fn pty_size(width: u16, height: u16) -> PtySize {
         cols: width.max(1),
         pixel_width: 0,
         pixel_height: 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::{Result as IoResult, Write};
+    use std::sync::atomic::Ordering;
+    use std::sync::{Arc, Mutex, RwLock};
+
+    use super::{
+        PtyStats, TerminalState, build_command, child_term_env, dsr_prefix_tail_len,
+        is_transient_pty_read_error, process_reader_bytes,
+    };
+
+    fn argv(builder: portable_pty::CommandBuilder) -> Vec<String> {
+        builder
+            .get_argv()
+            .iter()
+            .map(|value| value.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn build_command_uses_shell_on_unix_default() {
+        #[cfg(not(windows))]
+        assert_eq!(
+            argv(build_command("sh -c", &["printf".into(), "hello".into()]).unwrap()),
+            vec!["sh", "-c", "printf hello"]
+        );
+    }
+
+    #[test]
+    fn build_command_spawns_directly_for_windows_default_shell() {
+        #[cfg(windows)]
+        assert_eq!(
+            argv(build_command("cmd /C", &["app.exe".into(), "hello world".into()]).unwrap()),
+            vec!["app.exe", "hello world"]
+        );
+    }
+
+    #[test]
+    fn build_command_supports_placeholder_shell() {
+        assert_eq!(
+            argv(build_command("env WRAP={COMMAND}", &["echo".into(), "hi".into()]).unwrap()),
+            vec!["env", "WRAP=echo hi"]
+        );
+    }
+
+    #[test]
+    fn child_term_env_matches_platform_expectation() {
+        #[cfg(windows)]
+        assert_eq!(child_term_env(), "xterm");
+
+        #[cfg(not(windows))]
+        assert_eq!(child_term_env(), "xterm-256color");
+    }
+
+    #[test]
+    fn transient_pty_read_errors_are_retriable() {
+        assert!(is_transient_pty_read_error(&std::io::Error::from(
+            std::io::ErrorKind::Interrupted
+        )));
+        assert!(is_transient_pty_read_error(&std::io::Error::from(
+            std::io::ErrorKind::WouldBlock
+        )));
+        assert!(!is_transient_pty_read_error(&std::io::Error::from(
+            std::io::ErrorKind::BrokenPipe
+        )));
+    }
+
+    #[test]
+    fn pty_debug_status_reports_rx_counters() {
+        let stats = PtyStats::new();
+        stats.bytes_read.store(12, Ordering::Relaxed);
+        stats.read_events.store(3, Ordering::Relaxed);
+        stats.dsr_responses.store(1, Ordering::Relaxed);
+        stats.record_bytes(&[0x1b, 0x5b, 0x3f, 0x31]);
+
+        assert_eq!(
+            format!(
+                "pty rx={} ev={} dsr={} first={}",
+                stats.bytes_read.load(Ordering::Relaxed),
+                stats.read_events.load(Ordering::Relaxed),
+                stats.dsr_responses.load(Ordering::Relaxed),
+                stats.preview(),
+            ),
+            "pty rx=12 ev=3 dsr=1 first=1b 5b 3f 31"
+        );
+    }
+
+    struct TestWriter {
+        bytes: Arc<Mutex<Vec<u8>>>,
+    }
+
+    impl Write for TestWriter {
+        fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+            self.bytes.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> IoResult<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn responds_to_dsr_cursor_position_query() {
+        let state = Arc::new(RwLock::new(TerminalState {
+            parser: vt100::Parser::new(10, 20, 0),
+        }));
+        let stats = Arc::new(PtyStats::new());
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::new(Mutex::new(Box::new(TestWriter {
+            bytes: captured.clone(),
+        }) as Box<dyn Write + Send>));
+        let mut control_tail = Vec::new();
+
+        process_reader_bytes(&state, &stats, &writer, &mut control_tail, b"\x1b[6n");
+
+        assert_eq!(*captured.lock().unwrap(), b"\x1b[1;1R");
+        assert_eq!(stats.dsr_responses.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn dsr_uses_cursor_position_from_preceding_bytes_in_same_read() {
+        let state = Arc::new(RwLock::new(TerminalState {
+            parser: vt100::Parser::new(20, 40, 0),
+        }));
+        let stats = Arc::new(PtyStats::new());
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::new(Mutex::new(Box::new(TestWriter {
+            bytes: captured.clone(),
+        }) as Box<dyn Write + Send>));
+        let mut control_tail = Vec::new();
+
+        process_reader_bytes(
+            &state,
+            &stats,
+            &writer,
+            &mut control_tail,
+            b"\x1b[10;20H\x1b[6n",
+        );
+
+        assert_eq!(*captured.lock().unwrap(), b"\x1b[10;20R");
+        assert_eq!(stats.dsr_responses.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn dsr_prefix_tail_len_tracks_partial_query_suffixes() {
+        assert_eq!(dsr_prefix_tail_len(b""), 0);
+        assert_eq!(dsr_prefix_tail_len(b"\x1b"), 1);
+        assert_eq!(dsr_prefix_tail_len(b"\x1b["), 2);
+        assert_eq!(dsr_prefix_tail_len(b"\x1b[6"), 3);
+        assert_eq!(dsr_prefix_tail_len(b"abc"), 0);
+    }
+
+    #[test]
+    fn vt100_scrollback_supports_offsets_beyond_visible_rows() {
+        let mut parser = vt100::Parser::new(3, 8, 32);
+        parser.process(b"1\n2\n3\n4\n5\n6\n7\n8\n");
+
+        let visible_now: Vec<String> = parser.screen().rows(0, 8).collect();
+        assert_eq!(visible_now.len(), 3);
+
+        parser.screen_mut().set_scrollback(6);
+        let older_rows: Vec<String> = parser.screen().rows(0, 8).collect();
+
+        assert_eq!(parser.screen().scrollback(), 6);
+        assert_eq!(older_rows.len(), 3);
+        assert_ne!(older_rows, visible_now);
+        assert!(older_rows.iter().any(|row| row.contains('2')));
     }
 }

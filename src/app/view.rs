@@ -15,6 +15,9 @@ impl App {
     }
 
     pub fn selected_snapshot(&self) -> Option<ScreenSnapshot> {
+        if self.follow_latest && self.live_scrollback_offset > 0 {
+            return self.live_scrollback_snapshot.clone();
+        }
         self.ensure_view_cache();
         self.view
             .cache
@@ -24,6 +27,9 @@ impl App {
     }
 
     pub fn previous_snapshot(&self) -> Option<ScreenSnapshot> {
+        if self.follow_latest && self.live_scrollback_offset > 0 {
+            return None;
+        }
         self.ensure_view_cache();
         self.view
             .cache
@@ -192,5 +198,68 @@ impl App {
 
     pub(super) fn invalidate_view_cache(&self) {
         *self.view.cache.borrow_mut() = None;
+    }
+
+    pub(super) fn clear_live_scrollback_view(&mut self) {
+        self.live_scrollback_offset = 0;
+        self.live_scrollback_snapshot = None;
+    }
+
+    pub(super) fn reset_watch_viewport(&mut self) {
+        self.ui.watch_scroll = 0;
+        self.ui.horizontal_scroll = 0;
+    }
+
+    pub(super) fn scroll_selected_watch_view(&mut self, delta: isize) -> bool {
+        let max_offset = self
+            .selected_snapshot()
+            .map(|snapshot| usize::from(snapshot.height().saturating_sub(1)))
+            .unwrap_or(0);
+        let next = if delta >= 0 {
+            self.ui.watch_scroll.saturating_add(delta as usize)
+        } else {
+            self.ui.watch_scroll.saturating_sub(delta.unsigned_abs())
+        }
+        .min(max_offset);
+        let changed = next != self.ui.watch_scroll;
+        self.ui.watch_scroll = next;
+        changed
+    }
+
+    pub(super) fn refresh_live_scrollback_view(&mut self) -> anyhow::Result<()> {
+        self.refresh_live_scrollback_view_at(self.live_scrollback_offset)
+    }
+
+    fn refresh_live_scrollback_view_at(&mut self, offset: usize) -> anyhow::Result<()> {
+        if offset == 0 {
+            self.clear_live_scrollback_view();
+            return Ok(());
+        }
+        let (width, height) = crossterm::terminal::size().unwrap_or((120, 40));
+        let Some(snapshot) = self
+            .source
+            .view_snapshot(width, height.saturating_sub(2), offset)?
+        else {
+            self.clear_live_scrollback_view();
+            return Ok(());
+        };
+        self.live_scrollback_offset = snapshot.scrollback_offset();
+        self.live_scrollback_snapshot = Some(snapshot);
+        Ok(())
+    }
+
+    pub(super) fn scroll_main_screen_view(&mut self, delta: isize) -> anyhow::Result<bool> {
+        let target = if delta >= 0 {
+            self.live_scrollback_offset.saturating_add(delta as usize)
+        } else {
+            self.live_scrollback_offset
+                .saturating_sub(delta.unsigned_abs())
+        };
+        if target == self.live_scrollback_offset && self.live_scrollback_offset == 0 {
+            return Ok(false);
+        }
+        let previous_offset = self.live_scrollback_offset;
+        self.refresh_live_scrollback_view_at(target)?;
+        Ok(self.live_scrollback_offset != previous_offset)
     }
 }

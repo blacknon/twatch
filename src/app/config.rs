@@ -25,6 +25,7 @@ pub(super) struct AppConfig {
     pub snapshot_once: bool,
     pub aftercommand_runtime: Option<AfterCommandRuntime>,
     pub command_display: String,
+    pub debug: bool,
 }
 
 impl AppConfig {
@@ -74,6 +75,7 @@ impl AppConfig {
                 })
             }),
             command_display,
+            debug: cli.debug,
         })
     }
 }

@@ -28,14 +28,26 @@ pub struct CaptureFrame {
 
 pub trait FrameSource {
     fn capture(&mut self, width: u16, height: u16) -> Result<CaptureFrame>;
+    fn view_snapshot(
+        &mut self,
+        width: u16,
+        height: u16,
+        scrollback_offset: usize,
+    ) -> Result<Option<ScreenSnapshot>> {
+        let _ = (width, height, scrollback_offset);
+        Ok(None)
+    }
     fn resize(&mut self, width: u16, height: u16) -> Result<()>;
     fn send_key(&mut self, key: KeyEvent) -> Result<()>;
-    fn send_mouse(&mut self, event: MouseEvent, body_row_offset: u16) -> Result<()>;
+    fn send_mouse(&mut self, event: MouseEvent, body_row_offset: u16) -> Result<bool>;
     fn toggle_child_pause(&mut self) -> Result<Option<bool>> {
         Ok(None)
     }
     fn supports_child_pause(&self) -> bool {
         false
+    }
+    fn debug_status(&self) -> Option<String> {
+        None
     }
     fn has_pending_update(&self) -> bool;
     fn is_event_driven(&self) -> bool;
@@ -43,10 +55,11 @@ pub trait FrameSource {
     fn terminate(&mut self) -> Result<()>;
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SourceEvent {
     Updated,
     Closed,
+    ClosedWithError(String),
 }
 
 pub struct DemoRunner {
@@ -130,8 +143,8 @@ impl FrameSource for DemoRunner {
         Ok(())
     }
 
-    fn send_mouse(&mut self, _event: MouseEvent, _body_row_offset: u16) -> Result<()> {
-        Ok(())
+    fn send_mouse(&mut self, _event: MouseEvent, _body_row_offset: u16) -> Result<bool> {
+        Ok(false)
     }
 
     fn has_pending_update(&self) -> bool {
@@ -164,8 +177,8 @@ impl FrameSource for ReplayRunner {
         Ok(())
     }
 
-    fn send_mouse(&mut self, _event: MouseEvent, _body_row_offset: u16) -> Result<()> {
-        Ok(())
+    fn send_mouse(&mut self, _event: MouseEvent, _body_row_offset: u16) -> Result<bool> {
+        Ok(false)
     }
 
     fn has_pending_update(&self) -> bool {

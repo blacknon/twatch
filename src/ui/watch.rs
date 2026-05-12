@@ -1,4 +1,5 @@
 use ratatui::buffer::Buffer;
+use ratatui::layout::Position;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
@@ -12,17 +13,20 @@ use crate::screen::{Cell, ScreenSnapshot};
 use super::{BORDER_ACTIVE, DIFF_BG, DIFF_FG, PANEL_BG, SEARCH_BG};
 
 pub(super) fn draw_watch(frame: &mut Frame<'_>, app: &App, area: Rect) {
-    let watch_chunks = if app.ui.show_inspector {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(6)])
-            .split(area)
+    let debug_height = if app.debug && app.source_debug_status().is_some() {
+        1
     } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(1), Constraint::Length(0)])
-            .split(area)
+        0
     };
+    let inspector_height = if app.ui.show_inspector { 6 } else { 0 };
+    let watch_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Min(1),
+            Constraint::Length(inspector_height),
+            Constraint::Length(debug_height),
+        ])
+        .split(area);
 
     let block = Block::default()
         .style(Style::default().bg(PANEL_BG))
@@ -60,6 +64,14 @@ pub(super) fn draw_watch(frame: &mut Frame<'_>, app: &App, area: Rect) {
                 inspect_y,
             );
         }
+
+        if let Some(position) = watch_cursor_position(app, &snapshot, previous.as_ref(), inner) {
+            frame.set_cursor_position(position);
+        }
+    }
+
+    if debug_height > 0 {
+        draw_debug_status(frame, watch_chunks[2], app.source_debug_status().as_deref());
     }
 }
 
@@ -257,6 +269,84 @@ fn draw_inspector(
         )
         .style(Style::default().fg(Color::White).bg(PANEL_BG));
     frame.render_widget(widget, area);
+}
+
+fn draw_debug_status(frame: &mut Frame<'_>, area: Rect, debug_status: Option<&str>) {
+    let line = debug_status.unwrap_or("");
+    let widget = Paragraph::new(Line::from(line.to_string()))
+        .style(Style::default().fg(Color::Indexed(244)).bg(PANEL_BG));
+    frame.render_widget(widget, area);
+}
+
+fn watch_cursor_position(
+    app: &App,
+    snapshot: &ScreenSnapshot,
+    previous: Option<&ScreenSnapshot>,
+    area: Rect,
+) -> Option<Position> {
+    if !snapshot.cursor_visible()
+        || !app.should_render_terminal_cursor()
+        || app.ui.show_help
+        || app.ui.show_exit_confirm
+        || app.is_search_mode()
+        || area.width == 0
+        || area.height == 0
+    {
+        return None;
+    }
+
+    let (cursor_x, cursor_y) = snapshot.cursor_position();
+    let cursor_x = usize::from(cursor_x);
+    let cursor_y = usize::from(cursor_y);
+
+    if cursor_x < app.ui.horizontal_scroll {
+        return None;
+    }
+
+    let visible_x = cursor_x - app.ui.horizontal_scroll;
+    if visible_x >= usize::from(area.width) {
+        return None;
+    }
+
+    let start_row = app.ui.watch_scroll.min(usize::from(snapshot.height()));
+    if cursor_y < start_row {
+        return None;
+    }
+
+    let visible_y = if app.diff_only {
+        let widget = WatchWidget {
+            snapshot,
+            previous,
+            diff_mode: app.diff_mode,
+            diff_only: app.diff_only,
+            search_query: &app.ui.filter_query,
+            filter_mode: app.filter_mode(),
+            vertical_scroll: app.ui.watch_scroll,
+            horizontal_scroll: app.ui.horizontal_scroll,
+            inspect_cell: None,
+        };
+        if !widget.row_changed(cursor_y as u16) {
+            return None;
+        }
+        let mut visible = 0usize;
+        for row in start_row..cursor_y {
+            if widget.row_changed(row as u16) {
+                visible += 1;
+            }
+        }
+        visible
+    } else {
+        cursor_y - start_row
+    };
+
+    if visible_y >= usize::from(area.height) {
+        return None;
+    }
+
+    Some(Position::new(
+        area.x + visible_x as u16,
+        area.y + visible_y as u16,
+    ))
 }
 
 fn find_char_matches(line: &str, needle: &str, filter_mode: FilterMode) -> Vec<usize> {

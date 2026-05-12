@@ -9,7 +9,7 @@ use crate::app::{App, DiffMode, FilterMode};
 
 use super::{
     BADGE_BLUE, BADGE_CYAN, BADGE_DIM_TEXT, BADGE_GREEN, BADGE_GREY, BADGE_MAGENTA, BADGE_TEXT,
-    COMMAND_ACCENT, COMMAND_FG, HEADER_BG, HEADER_SUB_BG, TIMESTAMP_FG,
+    COMMAND_ACCENT, HEADER_BG, HEADER_SUB_BG, TIMESTAMP_FG,
 };
 
 pub(super) fn draw_header_line_one(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -28,16 +28,15 @@ pub(super) fn draw_header_line_one(frame: &mut Frame<'_>, app: &App, area: Rect)
     } else {
         format!("Every {:>4.3}", app.interval_secs)
     };
+    let command_text = format!("{cadence} {}", app.command_display());
     let command_line = Line::from(vec![
         Span::styled(" ", Style::default().bg(HEADER_BG)),
-        Span::styled(cadence, Style::default().fg(Color::White).bg(HEADER_BG)),
-        Span::styled(" ", Style::default().bg(HEADER_BG)),
         Span::styled(
-            app.command_display().to_string(),
-            Style::default()
-                .fg(COMMAND_FG)
-                .bg(HEADER_BG)
-                .add_modifier(Modifier::BOLD),
+            truncate_text(
+                &command_text,
+                usize::from(chunks[0].width).saturating_sub(1),
+            ),
+            Style::default().fg(Color::White).bg(HEADER_BG),
         ),
     ]);
 
