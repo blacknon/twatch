@@ -152,6 +152,10 @@ impl PtyRunner {
         let (cursor_row, cursor_col) = screen.cursor_position();
         snapshot.set_cursor_state(cursor_col, cursor_row, !screen.hide_cursor());
         snapshot.set_screen_mode(screen.alternate_screen(), screen.scrollback());
+        snapshot.set_mouse_reporting(!matches!(
+            screen.mouse_protocol_mode(),
+            vt100::MouseProtocolMode::None
+        ));
 
         for row in 0..rows {
             for col in 0..cols {
@@ -354,15 +358,13 @@ fn start_reader_thread(
                     stats.bytes_read.fetch_add(count as u64, Ordering::Relaxed);
                     stats.read_events.fetch_add(1, Ordering::Relaxed);
                     stats.record_bytes(&buffer[..count]);
-                    handle_terminal_queries(
+                    process_reader_bytes(
                         &state,
                         &stats,
                         &writer,
                         &mut control_tail,
                         &buffer[..count],
                     );
-                    let mut state = state.write().expect("terminal state poisoned");
-                    state.parser.process(&buffer[..count]);
                     dirty.store(true, Ordering::Relaxed);
                     match update_tx.try_send(SourceEvent::Updated) {
                         Ok(()) | Err(TrySendError::Full(_)) => {}
@@ -382,7 +384,7 @@ fn start_reader_thread(
     });
 }
 
-fn handle_terminal_queries(
+fn process_reader_bytes(
     state: &Arc<RwLock<TerminalState>>,
     stats: &Arc<PtyStats>,
     writer: &Arc<Mutex<Box<dyn Write + Send>>>,
@@ -393,9 +395,11 @@ fn handle_terminal_queries(
     scan.extend_from_slice(control_tail);
     scan.extend_from_slice(bytes);
 
+    let mut processed = 0usize;
     let mut index = 0usize;
     while index + 4 <= scan.len() {
         if scan[index..].starts_with(b"\x1b[6n") {
+            process_parser_bytes(state, &scan[processed..index]);
             let (row, col) = {
                 let state = state.read().expect("terminal state poisoned");
                 state.parser.screen().cursor_position()
@@ -407,15 +411,39 @@ fn handle_terminal_queries(
                     stats.dsr_responses.fetch_add(1, Ordering::Relaxed);
                 }
             }
+            process_parser_bytes(state, &scan[index..index + 4]);
             index += 4;
+            processed = index;
         } else {
             index += 1;
         }
     }
 
+    let keep = dsr_prefix_tail_len(&scan[processed..]);
+    let stable_end = scan.len().saturating_sub(keep);
+    process_parser_bytes(state, &scan[processed..stable_end]);
+
     control_tail.clear();
-    let keep = scan.len().min(3);
-    control_tail.extend_from_slice(&scan[scan.len() - keep..]);
+    control_tail.extend_from_slice(&scan[stable_end..]);
+}
+
+fn process_parser_bytes(state: &Arc<RwLock<TerminalState>>, bytes: &[u8]) {
+    if bytes.is_empty() {
+        return;
+    }
+    let mut state = state.write().expect("terminal state poisoned");
+    state.parser.process(bytes);
+}
+
+fn dsr_prefix_tail_len(bytes: &[u8]) -> usize {
+    const DSR: &[u8] = b"\x1b[6n";
+    let max_len = bytes.len().min(DSR.len().saturating_sub(1));
+    for len in (1..=max_len).rev() {
+        if bytes[bytes.len() - len..] == DSR[..len] {
+            return len;
+        }
+    }
+    0
 }
 
 fn is_child_exit_error(err: &std::io::Error) -> bool {
@@ -520,8 +548,8 @@ mod tests {
     use std::sync::{Arc, Mutex, RwLock};
 
     use super::{
-        PtyStats, TerminalState, build_command, child_term_env, handle_terminal_queries,
-        is_transient_pty_read_error,
+        PtyStats, TerminalState, build_command, child_term_env, dsr_prefix_tail_len,
+        is_transient_pty_read_error, process_reader_bytes,
     };
 
     fn argv(builder: portable_pty::CommandBuilder) -> Vec<String> {
@@ -627,10 +655,43 @@ mod tests {
         }) as Box<dyn Write + Send>));
         let mut control_tail = Vec::new();
 
-        handle_terminal_queries(&state, &stats, &writer, &mut control_tail, b"\x1b[6n");
+        process_reader_bytes(&state, &stats, &writer, &mut control_tail, b"\x1b[6n");
 
         assert_eq!(*captured.lock().unwrap(), b"\x1b[1;1R");
         assert_eq!(stats.dsr_responses.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn dsr_uses_cursor_position_from_preceding_bytes_in_same_read() {
+        let state = Arc::new(RwLock::new(TerminalState {
+            parser: vt100::Parser::new(20, 40, 0),
+        }));
+        let stats = Arc::new(PtyStats::new());
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::new(Mutex::new(Box::new(TestWriter {
+            bytes: captured.clone(),
+        }) as Box<dyn Write + Send>));
+        let mut control_tail = Vec::new();
+
+        process_reader_bytes(
+            &state,
+            &stats,
+            &writer,
+            &mut control_tail,
+            b"\x1b[10;20H\x1b[6n",
+        );
+
+        assert_eq!(*captured.lock().unwrap(), b"\x1b[10;20R");
+        assert_eq!(stats.dsr_responses.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn dsr_prefix_tail_len_tracks_partial_query_suffixes() {
+        assert_eq!(dsr_prefix_tail_len(b""), 0);
+        assert_eq!(dsr_prefix_tail_len(b"\x1b"), 1);
+        assert_eq!(dsr_prefix_tail_len(b"\x1b["), 2);
+        assert_eq!(dsr_prefix_tail_len(b"\x1b[6"), 3);
+        assert_eq!(dsr_prefix_tail_len(b"abc"), 0);
     }
 
     #[test]

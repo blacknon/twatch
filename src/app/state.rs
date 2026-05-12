@@ -99,6 +99,12 @@ impl App {
             .unwrap_or(false)
     }
 
+    pub fn selected_snapshot_has_mouse_reporting(&self) -> bool {
+        self.selected_snapshot()
+            .map(|snapshot| snapshot.mouse_reporting())
+            .unwrap_or(false)
+    }
+
     pub(crate) fn should_render_terminal_cursor(&self) -> bool {
         self.follow_latest && self.live_scrollback_offset == 0 && self.ui.watch_scroll == 0
     }

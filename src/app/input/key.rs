@@ -233,7 +233,7 @@ impl App {
             None => match key.code {
                 KeyCode::Esc => {
                     self.pending_mouse_escape = Some(BrokenMouseEscape::Esc);
-                    true
+                    false
                 }
                 _ => false,
             },

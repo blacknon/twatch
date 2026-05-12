@@ -666,6 +666,35 @@ fn main_screen_mouse_scroll_uses_live_scrollback_view() {
 }
 
 #[test]
+fn primary_screen_mouse_tracking_passthroughs_wheel_events() {
+    let mut snapshot = ScreenSnapshot::from_text_lines(20, 5, &["one"]);
+    snapshot.set_screen_mode(false, 0);
+    snapshot.set_mouse_reporting(true);
+    let source = MockSource::new(vec![CaptureFrame {
+        label: "a".to_string(),
+        timestamp_unix_ms: 1,
+        snapshot,
+        raw_output: "one".to_string(),
+        changed: true,
+    }]);
+    let requests = source.view_snapshot_requests.clone();
+    let mouse_events = source.mouse_events.clone();
+    let mut app = App::new(&test_cli(), Box::new(source)).unwrap();
+
+    app.capture(20, 5).unwrap();
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 1,
+        row: 3,
+        modifiers: KeyModifiers::NONE,
+    })
+    .unwrap();
+
+    assert!(requests.lock().unwrap().is_empty());
+    assert_eq!(mouse_events.lock().unwrap().len(), 1);
+}
+
+#[test]
 fn alternate_screen_mouse_scroll_still_passthroughs_to_child() {
     let mut snapshot = ScreenSnapshot::from_text_lines(20, 5, &["one"]);
     snapshot.set_screen_mode(true, 0);
@@ -719,6 +748,36 @@ fn main_screen_mouse_scroll_works_in_app_input_mode() {
     assert_eq!(requests.lock().unwrap().as_slice(), &[3]);
     assert!(mouse_events.lock().unwrap().is_empty());
     assert_eq!(app.selected_snapshot().unwrap().scrollback_offset(), 3);
+}
+
+#[test]
+fn primary_screen_mouse_tracking_passthroughs_wheel_events_in_app_input_mode() {
+    let mut snapshot = ScreenSnapshot::from_text_lines(20, 5, &["one"]);
+    snapshot.set_screen_mode(false, 0);
+    snapshot.set_mouse_reporting(true);
+    let source = MockSource::new(vec![CaptureFrame {
+        label: "a".to_string(),
+        timestamp_unix_ms: 1,
+        snapshot,
+        raw_output: "one".to_string(),
+        changed: true,
+    }]);
+    let requests = source.view_snapshot_requests.clone();
+    let mouse_events = source.mouse_events.clone();
+    let mut app = App::new(&test_cli(), Box::new(source)).unwrap();
+
+    app.capture(20, 5).unwrap();
+    app.ui.app_input_mode = true;
+    app.handle_mouse(MouseEvent {
+        kind: MouseEventKind::ScrollUp,
+        column: 1,
+        row: 3,
+        modifiers: KeyModifiers::NONE,
+    })
+    .unwrap();
+
+    assert!(requests.lock().unwrap().is_empty());
+    assert_eq!(mouse_events.lock().unwrap().len(), 1);
 }
 
 #[test]
@@ -912,7 +971,9 @@ fn broken_sgr_mouse_tail_is_not_forwarded_as_key_input() {
             .unwrap();
     }
 
-    assert!(key_events.lock().unwrap().is_empty());
+    let sent = key_events.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].code, KeyCode::Esc);
 }
 
 #[test]
@@ -937,7 +998,9 @@ fn broken_sgr_mouse_tail_with_shifted_characters_is_not_forwarded() {
     app.handle_key_event(KeyEvent::new(KeyCode::Char('M'), KeyModifiers::SHIFT))
         .unwrap();
 
-    assert!(key_events.lock().unwrap().is_empty());
+    let sent = key_events.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].code, KeyCode::Esc);
 }
 
 #[test]
@@ -956,7 +1019,26 @@ fn broken_legacy_mouse_tail_is_not_forwarded_as_key_input() {
             .unwrap();
     }
 
-    assert!(key_events.lock().unwrap().is_empty());
+    let sent = key_events.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].code, KeyCode::Esc);
+}
+
+#[test]
+fn lone_escape_after_mouse_is_forwarded_to_child() {
+    let source = MockSource::new(vec![frame("a", &["one"])]);
+    let key_events = source.key_events.clone();
+    let mut app = App::new(&test_cli(), Box::new(source)).unwrap();
+
+    app.ui.app_input_mode = true;
+    app.last_mouse_input = Some(Instant::now());
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+
+    let sent = key_events.lock().unwrap();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].code, KeyCode::Esc);
 }
 
 #[test]

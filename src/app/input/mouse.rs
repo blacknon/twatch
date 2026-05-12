@@ -18,6 +18,16 @@ impl App {
                 if matches!(
                     mouse.kind,
                     MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                ) && self.selected_snapshot_has_mouse_reporting()
+                {
+                    if self.source.send_mouse(mouse, 2)? {
+                        self.record_child_mouse_event(mouse);
+                    }
+                    return Ok(false);
+                }
+                if matches!(
+                    mouse.kind,
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
                 ) && !self.selected_snapshot_is_alternate_screen()
                 {
                     let delta = match mouse.kind {
@@ -53,6 +63,12 @@ impl App {
                     self.ui.focus = FocusPane::History;
                     self.move_down();
                     return Ok(true);
+                } else if self.follow_latest && self.selected_snapshot_has_mouse_reporting() {
+                    self.ui.focus = FocusPane::Watch;
+                    if self.source.send_mouse(mouse, 2)? {
+                        self.record_child_mouse_event(mouse);
+                    }
+                    return Ok(previous_focus != self.ui.focus);
                 } else if self.follow_latest && !self.selected_snapshot_is_alternate_screen() {
                     self.ui.focus = FocusPane::Watch;
                     let changed = self.scroll_main_screen_view(-3)?;
@@ -75,6 +91,12 @@ impl App {
                     self.ui.focus = FocusPane::History;
                     self.move_up();
                     return Ok(true);
+                } else if self.follow_latest && self.selected_snapshot_has_mouse_reporting() {
+                    self.ui.focus = FocusPane::Watch;
+                    if self.source.send_mouse(mouse, 2)? {
+                        self.record_child_mouse_event(mouse);
+                    }
+                    return Ok(previous_focus != self.ui.focus);
                 } else if self.follow_latest && !self.selected_snapshot_is_alternate_screen() {
                     self.ui.focus = FocusPane::Watch;
                     let changed = self.scroll_main_screen_view(3)?;

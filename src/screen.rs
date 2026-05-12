@@ -82,6 +82,7 @@ pub struct ScreenSnapshot {
     cursor_visible: bool,
     alternate_screen: bool,
     scrollback_offset: usize,
+    mouse_reporting: bool,
 }
 
 impl ScreenSnapshot {
@@ -96,6 +97,7 @@ impl ScreenSnapshot {
             cursor_visible: false,
             alternate_screen: false,
             scrollback_offset: 0,
+            mouse_reporting: false,
         }
     }
 
@@ -194,6 +196,10 @@ impl ScreenSnapshot {
         self.scrollback_offset
     }
 
+    pub fn mouse_reporting(&self) -> bool {
+        self.mouse_reporting
+    }
+
     pub fn set_cursor_state(&mut self, x: u16, y: u16, visible: bool) {
         self.cursor_x = x.min(self.width.saturating_sub(1));
         self.cursor_y = y.min(self.height.saturating_sub(1));
@@ -203,6 +209,10 @@ impl ScreenSnapshot {
     pub fn set_screen_mode(&mut self, alternate_screen: bool, scrollback_offset: usize) {
         self.alternate_screen = alternate_screen;
         self.scrollback_offset = scrollback_offset;
+    }
+
+    pub fn set_mouse_reporting(&mut self, mouse_reporting: bool) {
+        self.mouse_reporting = mouse_reporting;
     }
 
     pub fn plain_line(&self, y: u16) -> String {
