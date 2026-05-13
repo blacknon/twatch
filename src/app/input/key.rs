@@ -44,16 +44,24 @@ impl App {
             return self.handle_search_key(key);
         }
 
+        if let Some(action) = self.find_key_action(key) {
+            return self.execute_key_action(action);
+        }
+
         if self.ui.app_input_mode {
             if !self.follow_latest {
                 return Ok(false);
             }
-            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
-                self.ui.app_input_mode = false;
+            if let Some(action) = self.find_child_binding_action(key) {
+                self.apply_child_binding(key, action)?;
                 return Ok(false);
             }
-            self.record_child_key_event(key);
-            self.source.send_key(key)?;
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
+                self.ui.app_input_mode = false;
+            } else {
+                self.record_child_key_event(key);
+                self.source.send_key(key)?;
+            }
             return Ok(false);
         }
 
@@ -61,8 +69,12 @@ impl App {
             && self.ui.focus == FocusPane::Watch
             && self.should_passthrough_to_app(key)
         {
-            self.record_child_key_event(key);
-            self.source.send_key(key)?;
+            if let Some(action) = self.find_child_binding_action(key) {
+                self.apply_child_binding(key, action)?;
+            } else {
+                self.record_child_key_event(key);
+                self.source.send_key(key)?;
+            }
             return Ok(false);
         }
 

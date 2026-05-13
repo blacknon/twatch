@@ -43,6 +43,8 @@ impl App {
             snapshot_trigger_fired: false,
             aftercommand_runtime: config.aftercommand_runtime,
             command_display: config.command_display,
+            keymap: config.keymap,
+            child_bindings: config.child_bindings,
             source,
             last_mouse_input: None,
             last_mouse_scroll_input: None,

@@ -274,6 +274,15 @@ impl FrameSource for PtyRunner {
         Ok(())
     }
 
+    fn send_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        let mut writer = self.writer.lock().expect("writer poisoned");
+        writer
+            .write_all(bytes)
+            .context("failed to write child binding bytes to PTY")?;
+        writer.flush().ok();
+        Ok(())
+    }
+
     fn send_mouse(&mut self, event: MouseEvent, body_row_offset: u16) -> Result<bool> {
         let encoded = {
             let state = self.state.read().expect("terminal state poisoned");

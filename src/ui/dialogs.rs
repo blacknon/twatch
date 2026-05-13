@@ -24,6 +24,8 @@ pub(super) fn draw_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("Left/Right    focus watch/history"),
         Line::from("Up/Down       child app in watch pane / move history"),
         Line::from("Mouse         passthrough only on latest"),
+        Line::from("--keymap      remap twatch actions"),
+        Line::from("--bind        override child TUI keys"),
         Line::from("Backspace     toggle history pane"),
         Line::from("/             search history"),
         Line::from("*             regex filter history"),

@@ -95,7 +95,7 @@ impl App {
         self.follow_latest = false;
     }
 
-    fn move_history_by(&mut self, offset: isize) {
+    pub(super) fn move_history_by(&mut self, offset: isize) {
         if self.filtered.is_empty() {
             return;
         }

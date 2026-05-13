@@ -43,6 +43,9 @@ pub trait FrameSource {
     }
     fn resize(&mut self, width: u16, height: u16) -> Result<()>;
     fn send_key(&mut self, key: KeyEvent) -> Result<()>;
+    fn send_bytes(&mut self, _bytes: &[u8]) -> Result<()> {
+        Ok(())
+    }
     fn send_mouse(&mut self, event: MouseEvent, body_row_offset: u16) -> Result<bool>;
     fn toggle_child_pause(&mut self) -> Result<Option<bool>> {
         Ok(None)

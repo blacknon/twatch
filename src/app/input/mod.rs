@@ -7,7 +7,10 @@ use std::time::Duration;
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::{App, DiffMode, FocusPane, InputMode};
+use super::{App, DiffMode, FilterMode, FocusPane, InputMode};
+use crate::child_bindings::ChildBindingAction;
+use crate::input_key::KeyPress;
+use crate::keymap::KeyAction;
 
 mod history_nav;
 mod key;
@@ -147,5 +150,170 @@ impl App {
         };
         self.ui.inspect_x = self.ui.inspect_x.min(snapshot.width().saturating_sub(1));
         self.ui.inspect_y = self.ui.inspect_y.min(snapshot.height().saturating_sub(1));
+    }
+
+    fn find_key_action(&self, key: KeyEvent) -> Option<KeyAction> {
+        let press = KeyPress::from(key);
+        self.keymap
+            .iter()
+            .rev()
+            .find(|binding| binding.trigger == press)
+            .map(|binding| binding.action)
+    }
+
+    fn find_child_binding_action(&self, key: KeyEvent) -> Option<ChildBindingAction> {
+        let press = KeyPress::from(key);
+        self.child_bindings
+            .iter()
+            .rev()
+            .find(|binding| binding.trigger == press)
+            .map(|binding| binding.action.clone())
+    }
+
+    fn apply_child_binding(&mut self, key: KeyEvent, action: ChildBindingAction) -> Result<()> {
+        match action {
+            ChildBindingAction::Send(bytes) => {
+                self.record_child_key_event(key);
+                self.source.send_bytes(&bytes)?;
+            }
+            ChildBindingAction::SaveSnapshot => self.save_snapshot()?,
+        }
+        Ok(())
+    }
+
+    fn execute_key_action(&mut self, action: KeyAction) -> Result<bool> {
+        match action {
+            KeyAction::Up => self.move_up(),
+            KeyAction::WatchPaneUp => {
+                self.ui.focus = FocusPane::Watch;
+                self.scroll_selected_watch_view(-1);
+            }
+            KeyAction::HistoryPaneUp => {
+                self.ui.focus = FocusPane::History;
+                self.move_history_by(-1);
+            }
+            KeyAction::Down => self.move_down(),
+            KeyAction::WatchPaneDown => {
+                self.ui.focus = FocusPane::Watch;
+                self.scroll_selected_watch_view(1);
+            }
+            KeyAction::HistoryPaneDown => {
+                self.ui.focus = FocusPane::History;
+                self.move_history_by(1);
+            }
+            KeyAction::PageUp => self.page_up(),
+            KeyAction::WatchPanePageUp => {
+                self.ui.focus = FocusPane::Watch;
+                self.scroll_selected_watch_view(-10);
+            }
+            KeyAction::HistoryPanePageUp => {
+                self.ui.focus = FocusPane::History;
+                self.move_history_by(-10);
+            }
+            KeyAction::PageDown => self.page_down(),
+            KeyAction::WatchPanePageDown => {
+                self.ui.focus = FocusPane::Watch;
+                self.scroll_selected_watch_view(10);
+            }
+            KeyAction::HistoryPanePageDown => {
+                self.ui.focus = FocusPane::History;
+                self.move_history_by(10);
+            }
+            KeyAction::MoveTop => self.move_top(),
+            KeyAction::WatchPaneMoveTop => {
+                self.ui.focus = FocusPane::Watch;
+                self.ui.watch_scroll = 0;
+            }
+            KeyAction::HistoryPaneMoveTop => {
+                self.ui.focus = FocusPane::History;
+                self.follow_latest = true;
+                if let Some(first) = self.filtered.first().copied() {
+                    self.selected_index = first;
+                }
+                self.invalidate_view_cache();
+            }
+            KeyAction::MoveEnd => self.move_end(),
+            KeyAction::WatchPaneMoveEnd => {
+                self.ui.focus = FocusPane::Watch;
+                self.ui.watch_scroll = usize::MAX / 2;
+            }
+            KeyAction::HistoryPaneMoveEnd => {
+                self.ui.focus = FocusPane::History;
+                if let Some(last) = self.filtered.last().copied() {
+                    self.selected_index = last;
+                    self.follow_latest = false;
+                    self.sync_follow_latest_with_selection();
+                }
+            }
+            KeyAction::ToggleFocus => self.toggle_focus(),
+            KeyAction::FocusWatchPane => self.ui.focus = FocusPane::Watch,
+            KeyAction::FocusHistoryPane => self.ui.focus = FocusPane::History,
+            KeyAction::Quit => self.ui.show_exit_confirm = true,
+            KeyAction::Reset => {
+                if self.ui.show_help {
+                    self.ui.show_help = false;
+                } else if self.ui.show_exit_confirm {
+                    self.ui.show_exit_confirm = false;
+                } else if self.input_mode == InputMode::Search || !self.ui.filter_query.is_empty() {
+                    self.clear_filter()?;
+                }
+            }
+            KeyAction::Delete => self.delete_selected_history()?,
+            KeyAction::ClearExceptSelected => self.clear_history_except_selected()?,
+            KeyAction::Cancel => {
+                if self.ui.filter_query.is_empty() {
+                    self.ui.show_exit_confirm = true;
+                } else {
+                    self.clear_filter()?;
+                }
+            }
+            KeyAction::ForceCancel => return Ok(true),
+            KeyAction::Help => self.ui.show_help = !self.ui.show_help,
+            KeyAction::ToggleViewHistoryPane => {
+                self.ui.show_history = !self.ui.show_history;
+                if self.ui.show_history {
+                    self.ui.focus = FocusPane::History;
+                } else if self.ui.focus == FocusPane::History {
+                    self.ui.focus = FocusPane::Watch;
+                    self.ui.show_history_details = false;
+                }
+            }
+            KeyAction::ToggleHistorySummary => {
+                self.ui.show_history_details = !self.ui.show_history_details;
+                if !self.ui.show_history {
+                    self.ui.show_history = true;
+                    self.ui.focus = FocusPane::History;
+                }
+            }
+            KeyAction::ToggleDiffMode => self.cycle_diff_mode(),
+            KeyAction::SetDiffModeNone => self.diff_mode = DiffMode::None,
+            KeyAction::SetDiffModeWatch => self.diff_mode = DiffMode::Watch,
+            KeyAction::TogglePause => self.paused = !self.paused,
+            KeyAction::ToggleChildPause => self.toggle_child_pause()?,
+            KeyAction::ChangeFilterMode => self.start_search(FilterMode::Plain),
+            KeyAction::ChangeRegexFilterMode => self.start_search(FilterMode::Regex),
+            KeyAction::EnterAppInputMode => {
+                if self.ui.focus == FocusPane::Watch && self.follow_latest {
+                    self.reset_watch_viewport();
+                    self.clear_live_scrollback_view();
+                    self.ui.app_input_mode = true;
+                } else if self.ui.focus == FocusPane::Watch {
+                    self.ui.status_message =
+                        Some("app input mode is available only on latest".to_string());
+                }
+            }
+            KeyAction::LeaveAppInputMode => self.ui.app_input_mode = false,
+            KeyAction::ToggleInspector => {
+                self.ui.show_inspector = !self.ui.show_inspector;
+                self.clamp_inspector_to_snapshot();
+            }
+            KeyAction::SaveSnapshot => self.save_snapshot()?,
+            KeyAction::CycleSnapshotFormat => self.cycle_screenshot_format(),
+            KeyAction::ScrollLeft => {
+                self.ui.horizontal_scroll = self.ui.horizontal_scroll.saturating_sub(4)
+            }
+            KeyAction::ScrollRight => self.ui.horizontal_scroll += 4,
+        }
+        Ok(false)
     }
 }

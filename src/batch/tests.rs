@@ -72,6 +72,8 @@ fn test_cli() -> Cli {
         batch_diff_only: false,
         batch_no_color: false,
         aftercommand: None,
+        keymap: Vec::new(),
+        bind: Vec::new(),
         aftercommand_regex: None,
         aftercommand_change_cells: None,
         aftercommand_every: None,

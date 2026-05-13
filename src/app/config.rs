@@ -9,7 +9,9 @@ use regex::Regex;
 
 use super::{App, DiffMode};
 use crate::aftercommand::{AfterCommandConfig, AfterCommandRuntime};
+use crate::child_bindings::{ChildBinding, compile_child_bindings};
 use crate::cli::Cli;
+use crate::keymap::{KeyBinding, compile_keymap};
 use crate::screenshot::ScreenshotFormat;
 
 pub(super) struct AppConfig {
@@ -29,6 +31,8 @@ pub(super) struct AppConfig {
     pub aftercommand_runtime: Option<AfterCommandRuntime>,
     pub command_display: String,
     pub debug: bool,
+    pub keymap: Vec<KeyBinding>,
+    pub child_bindings: Vec<ChildBinding>,
 }
 
 impl AppConfig {
@@ -49,6 +53,8 @@ impl AppConfig {
             })
             .transpose()?;
         let command_display = App::command_display_from_cli(cli);
+        let keymap = compile_keymap(&cli.keymap).context("invalid --keymap")?;
+        let child_bindings = compile_child_bindings(&cli.bind).context("invalid --bind")?;
 
         Ok(Self {
             child_pause_supported,
@@ -78,6 +84,8 @@ impl AppConfig {
             }),
             command_display,
             debug: cli.debug,
+            keymap,
+            child_bindings,
         })
     }
 }

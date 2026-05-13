@@ -8,9 +8,11 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::aftercommand::AfterCommandRuntime;
+use crate::child_bindings::ChildBinding;
 use crate::cli::{DiffModeArg, ScreenshotFormatArg};
 use crate::history::HistoryMetadata;
 use crate::history::HistoryStore;
+use crate::keymap::KeyBinding;
 use crate::runner::FrameSource;
 use crate::screen::ScreenSnapshot;
 use crate::screenshot::ScreenshotFormat;
@@ -313,6 +315,8 @@ pub struct App {
     snapshot_trigger_fired: bool,
     aftercommand_runtime: Option<AfterCommandRuntime>,
     command_display: String,
+    keymap: Vec<KeyBinding>,
+    child_bindings: Vec<ChildBinding>,
     source: Box<dyn FrameSource>,
     last_mouse_input: Option<Instant>,
     last_mouse_scroll_input: Option<Instant>,
