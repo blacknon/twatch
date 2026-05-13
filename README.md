@@ -5,9 +5,11 @@ twatch - record, rewind, inspect, and diff terminal UI screens.
 
 ## Description
 
-`twatch` runs a TUI application inside a PTY, records screen changes, and lets
-you move back through history later, similar to [hwatch](https://github.com/blacknon/hwatch).
-It is aimed at debugging terminal UIs, not only recording them.
+twatch adds rewindable history to existing TUI applications.
+
+Full-screen terminal apps like htop, lazygit, k9s, and nmtui constantly redraw the same screen, so normal terminal scrollback often cannot show you what happened before.
+
+twatch runs the target app through a PTY, records its screen states, and lets you rewind, search, and diff previous frames. It can also extract selected ranges in batch mode and write them to standard output, making TUI content easier to inspect, debug, or pipe into other commands.
 
 ### demo
 
