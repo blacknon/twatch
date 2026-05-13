@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Blacknon. All rights reserved.
+// Use of this source code is governed by an MIT license
+// that can be found in the LICENSE file.
+
 use super::{prepare_snapshot, render_output};
 use crate::cli::{Cli, CropSpec, DiffModeArg, ScreenshotFormatArg};
 use crate::screen::ScreenSnapshot;
