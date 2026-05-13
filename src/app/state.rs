@@ -2,8 +2,6 @@
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 
-use std::time::{Duration, Instant};
-
 use anyhow::Result;
 
 use super::config::AppConfig;
@@ -16,7 +14,6 @@ impl App {
     pub fn new(cli: &Cli, source: Box<dyn FrameSource>) -> Result<Self> {
         let config = AppConfig::from_cli(cli, source.supports_child_pause())?;
         let mut app = Self {
-            interval_secs: config.interval_secs,
             debug: config.debug,
             paused: false,
             child_paused: false,
@@ -47,7 +44,6 @@ impl App {
             aftercommand_runtime: config.aftercommand_runtime,
             command_display: config.command_display,
             source,
-            last_tick: Instant::now(),
             last_mouse_input: None,
             last_mouse_scroll_input: None,
             pending_mouse_escape: None,
@@ -141,19 +137,6 @@ impl App {
 
     pub(super) fn trim_trigger_len(&self) -> usize {
         self.limit.saturating_add(self.trim_slack())
-    }
-
-    pub(super) fn tick_timeout(&self) -> Duration {
-        let interval = Duration::from_secs_f64(self.interval_secs.max(0.2));
-        interval.saturating_sub(self.last_tick.elapsed())
-    }
-
-    pub(super) fn should_capture_now(&self) -> bool {
-        if self.source.is_event_driven() {
-            self.source.has_pending_update()
-        } else {
-            self.last_tick.elapsed() >= Duration::from_secs_f64(self.interval_secs.max(0.2))
-        }
     }
 
     pub(super) fn is_source_closed_error(&self, err: &anyhow::Error) -> bool {

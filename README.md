@@ -63,7 +63,6 @@ Arguments:
   [COMMAND]...
 
 Options:
-  -n, --interval <INTERVAL>                        [default: 2]
   -b, --batch
       --batch-count <BATCH_COUNT>                  Stop after emitting this many batch frames
       --batch-size <WIDTH,HEIGHT>                  Use a fixed PTY size such as 80,24

@@ -27,12 +27,7 @@ pub(super) fn draw_header_line_one(frame: &mut Frame<'_>, app: &App, area: Rect)
         .constraints([Constraint::Min(10), Constraint::Length(24)])
         .split(area);
 
-    let cadence = if app.is_event_driven() {
-        "Event".to_string()
-    } else {
-        format!("Every {:>4.3}", app.interval_secs)
-    };
-    let command_text = format!("{cadence} {}", app.command_display());
+    let command_text = format!("Event {}", app.command_display());
     let command_line = Line::from(vec![
         Span::styled(" ", Style::default().bg(HEADER_BG)),
         Span::styled(

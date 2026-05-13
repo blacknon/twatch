@@ -284,7 +284,6 @@ impl InputTraceEvent {
 }
 
 pub struct App {
-    pub interval_secs: f64,
     pub debug: bool,
     pub paused: bool,
     pub child_paused: bool,
@@ -315,7 +314,6 @@ pub struct App {
     aftercommand_runtime: Option<AfterCommandRuntime>,
     command_display: String,
     source: Box<dyn FrameSource>,
-    last_tick: Instant,
     last_mouse_input: Option<Instant>,
     last_mouse_scroll_input: Option<Instant>,
     pending_mouse_escape: Option<BrokenMouseEscape>,

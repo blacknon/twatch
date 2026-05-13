@@ -20,9 +20,6 @@ pub fn default_shell() -> String {
 #[derive(Debug, Clone, Parser)]
 #[command(author, version, about = "watch for TUI apps", long_about = None)]
 pub struct Cli {
-    #[arg(short = 'n', long, default_value_t = 2.0)]
-    pub interval: f64,
-
     #[arg(short = 'b', long)]
     pub batch: bool,
 

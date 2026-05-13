@@ -65,7 +65,6 @@ fn renders_word_diff_with_same_prefix_shape() {
 
 fn test_cli() -> Cli {
     Cli {
-        interval: 2.0,
         batch: true,
         batch_count: None,
         batch_size: None,

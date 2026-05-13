@@ -1475,7 +1475,6 @@ fn history_snapshots_preserve_cursor_state() {
 
 fn test_cli() -> Cli {
     Cli {
-        interval: 2.0,
         batch: false,
         batch_count: None,
         batch_size: None,

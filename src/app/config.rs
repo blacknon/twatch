@@ -13,7 +13,6 @@ use crate::cli::Cli;
 use crate::screenshot::ScreenshotFormat;
 
 pub(super) struct AppConfig {
-    pub interval_secs: f64,
     pub child_pause_supported: bool,
     pub diff_mode: DiffMode,
     pub history_limit: usize,
@@ -52,7 +51,6 @@ impl AppConfig {
         let command_display = App::command_display_from_cli(cli);
 
         Ok(Self {
-            interval_secs: cli.interval,
             child_pause_supported,
             diff_mode: cli.differences.into(),
             history_limit: cli.limit.max(1),
