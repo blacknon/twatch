@@ -1170,7 +1170,10 @@ fn child_bindings_remap_passthrough_keys_to_raw_bytes() {
         .unwrap();
 
     assert!(key_events.lock().unwrap().is_empty());
-    assert_eq!(byte_events.lock().unwrap().as_slice(), &[b"\x1b[B".to_vec()]);
+    assert_eq!(
+        byte_events.lock().unwrap().as_slice(),
+        &[b"\x1b[B".to_vec()]
+    );
 }
 
 #[test]
