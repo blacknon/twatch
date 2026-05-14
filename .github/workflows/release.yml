@@ -75,10 +75,11 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          cache-bin: false
 
       - name: Install cross
         if: matrix.use_cross
-        run: cargo install cross --locked
+        run: rustup run stable cargo install cross --locked
 
       - name: Build binary
         shell: bash
@@ -86,7 +87,7 @@ jobs:
           if [[ "${{ matrix.use_cross }}" == "true" ]]; then
             cross build --release --target "${{ matrix.target }}"
           else
-            cargo build --release --target "${{ matrix.target }}"
+            rustup run stable cargo build --release --target "${{ matrix.target }}"
           fi
 
       - name: Package release archive
