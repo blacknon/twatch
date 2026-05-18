@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.4
+
+- Add customizable `twatch` keymaps with `-K/--keymap KEY=ACTION`, including pane-specific navigation, snapshot actions, pause control, and app-input mode switching
+- Add `twrap`-style child key overrides with `-k/--bind FROM=TO`, supporting key aliases, comma-separated key sequences, `text:...`, and `screenshot`
+- Remove the unused `--interval` option and simplify batch capture timing so PTY-backed sources wait on real source updates instead of a polling interval
+- Expand README and in-app help to document the current interaction model, custom keymap actions, and child key override behavior
+- Add regression coverage for custom keymaps and child binding overrides, including passthrough interception and custom exit/app-input flows
+- Refresh Rust CI and release workflows to avoid cached `cargo` shims on GitHub Actions and make macOS runner behavior more reliable
+- Add consistent source headers across Rust modules touched during this release
+
+This release is centered on input control and operational polish.
+It makes `twatch` more usable with editor-like workflows, shell-heavy sessions, and wrapped TUIs that benefit from custom local shortcuts or remapped child input.
+
+Notes:
+
+- `--interval` was removed because the current PTY workflow is event-driven and no longer relies on that option
+- The new input customization layer is the main user-facing change in this release
+
 ## 0.1.3
 
 - Improve Windows compatibility for wrapped TUIs by fixing PTY startup, direct process spawning, terminal query handling, and repeated key/mouse input behavior
