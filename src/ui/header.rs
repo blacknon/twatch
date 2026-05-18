@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Blacknon. All rights reserved.
+// Use of this source code is governed by an MIT license
+// that can be found in the LICENSE file.
+
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -23,12 +27,7 @@ pub(super) fn draw_header_line_one(frame: &mut Frame<'_>, app: &App, area: Rect)
         .constraints([Constraint::Min(10), Constraint::Length(24)])
         .split(area);
 
-    let cadence = if app.is_event_driven() {
-        "Event".to_string()
-    } else {
-        format!("Every {:>4.3}", app.interval_secs)
-    };
-    let command_text = format!("{cadence} {}", app.command_display());
+    let command_text = format!("Event {}", app.command_display());
     let command_line = Line::from(vec![
         Span::styled(" ", Style::default().bg(HEADER_BG)),
         Span::styled(

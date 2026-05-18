@@ -1,5 +1,8 @@
+// Copyright (c) 2026 Blacknon. All rights reserved.
+// Use of this source code is governed by an MIT license
+// that can be found in the LICENSE file.
+
 use std::path::PathBuf;
-use std::time::Instant;
 
 use anyhow::Result;
 
@@ -26,7 +29,6 @@ impl App {
         } = self.source.capture(width, height)?;
 
         if !changed && self.current_snapshot.is_some() {
-            self.last_tick = Instant::now();
             return Ok(());
         }
 
@@ -89,7 +91,6 @@ impl App {
         self.append_log_record()?;
         self.maybe_save_triggered_snapshot()?;
         self.maybe_run_aftercommand(&raw_output)?;
-        self.last_tick = Instant::now();
         Ok(())
     }
 

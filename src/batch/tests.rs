@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Blacknon. All rights reserved.
+// Use of this source code is governed by an MIT license
+// that can be found in the LICENSE file.
+
 use super::{prepare_snapshot, render_output};
 use crate::cli::{Cli, CropSpec, DiffModeArg, ScreenshotFormatArg};
 use crate::screen::ScreenSnapshot;
@@ -61,7 +65,6 @@ fn renders_word_diff_with_same_prefix_shape() {
 
 fn test_cli() -> Cli {
     Cli {
-        interval: 2.0,
         batch: true,
         batch_count: None,
         batch_size: None,
@@ -69,6 +72,8 @@ fn test_cli() -> Cli {
         batch_diff_only: false,
         batch_no_color: false,
         aftercommand: None,
+        keymap: Vec::new(),
+        bind: Vec::new(),
         aftercommand_regex: None,
         aftercommand_change_cells: None,
         aftercommand_every: None,

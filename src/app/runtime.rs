@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Blacknon. All rights reserved.
+// Use of this source code is governed by an MIT license
+// that can be found in the LICENSE file.
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
@@ -12,9 +16,7 @@ use crate::runner::SourceEvent;
 use crate::ui;
 
 impl App {
-    fn event_driven_poll_timeout(&self) -> Duration {
-        self.tick_timeout().min(Duration::from_millis(50))
-    }
+    const EVENT_POLL_TIMEOUT: Duration = Duration::from_millis(50);
 
     pub fn run(mut self, terminal: DefaultTerminal) -> Result<()> {
         let (tx, rx) = mpsc::channel();
@@ -105,7 +107,7 @@ impl App {
             }
 
             if self.source.is_event_driven() {
-                match rx.recv_timeout(self.event_driven_poll_timeout()) {
+                match rx.recv_timeout(Self::EVENT_POLL_TIMEOUT) {
                     Ok(AppEvent::Terminal(event)) => match self.process_terminal_event(event)? {
                         LoopControl::Continue(redraw) => {
                             if !self.paused && self.source.has_pending_update() {
@@ -149,7 +151,7 @@ impl App {
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
             } else {
-                match rx.recv_timeout(self.tick_timeout()) {
+                match rx.recv_timeout(Self::EVENT_POLL_TIMEOUT) {
                     Ok(AppEvent::Terminal(event)) => match self.process_terminal_event(event)? {
                         LoopControl::Continue(redraw) => {
                             needs_redraw = redraw || needs_redraw;
@@ -157,12 +159,7 @@ impl App {
                         LoopControl::Break => break,
                     },
                     Ok(AppEvent::SourceUpdated) | Ok(AppEvent::SourceClosed(_)) => {}
-                    Err(RecvTimeoutError::Timeout) => {
-                        if !self.paused && self.should_capture_now() {
-                            self.capture_terminal_size(&terminal)?;
-                            needs_redraw = true;
-                        }
-                    }
+                    Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
             }

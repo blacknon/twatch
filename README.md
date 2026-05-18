@@ -5,9 +5,11 @@ twatch - record, rewind, inspect, and diff terminal UI screens.
 
 ## Description
 
-`twatch` runs a TUI application inside a PTY, records screen changes, and lets
-you move back through history later, similar to [hwatch](https://github.com/blacknon/hwatch).
-It is aimed at debugging terminal UIs, not only recording them.
+twatch adds rewindable history to existing TUI applications.
+
+Full-screen terminal apps like htop, lazygit, k9s, and nmtui constantly redraw the same screen, so normal terminal scrollback often cannot show you what happened before.
+
+twatch runs the target app through a PTY, records its screen states, and lets you rewind, search, and diff previous frames. It can also extract selected ranges in batch mode and write them to standard output, making TUI content easier to inspect, debug, or pipe into other commands.
 
 ### demo
 
@@ -53,7 +55,7 @@ cargo install twatch
 
 ```text
 $ twatch --help
-TUI watch for terminal apps
+watch for TUI apps
 
 Usage: twatch [OPTIONS] [COMMAND]...
 
@@ -61,38 +63,66 @@ Arguments:
   [COMMAND]...
 
 Options:
-  -n, --interval <INTERVAL>                        [default: 2]
   -b, --batch
-      --batch-count <BATCH_COUNT>                  Stop after emitting this many batch frames
-      --batch-size <WIDTH,HEIGHT>                  Use a fixed PTY size such as 80,24
-      --batch-crop <X,Y,WIDTH,HEIGHT>              Crop batch output to a rectangle such as 10,5,40,12
-      --batch-diff-only                            Print only added content for batch diff output
-      --batch-no-color                             Disable ANSI color sequences in batch output
+
+      --batch-count <BATCH_COUNT>
+          Stop after emitting this many batch frames
+      --batch-size <WIDTH,HEIGHT>
+          Use a fixed PTY size such as 80,24
+      --batch-crop <X,Y,WIDTH,HEIGHT>
+          Crop batch output to a rectangle such as 10,5,40,12
+      --batch-diff-only
+          Print only added content for batch diff output
+      --batch-no-color
+          Disable ANSI color sequences in batch output
   -A, --aftercommand <AFTERCOMMAND>
-      --aftercommand-regex <AFTERCOMMAND_REGEX>    Only run aftercommand when output matches this regex
+
+  -K, --keymap <KEY=ACTION>
+          Remap twatch keys with KEY=ACTION
+  -k, --bind <FROM=TO>
+          Override child TUI keys with FROM=TO
+      --aftercommand-regex <AFTERCOMMAND_REGEX>
+          Only run aftercommand when output matches this regex
       --aftercommand-change-cells <AFTERCOMMAND_CHANGE_CELLS>
-                                                   Only run aftercommand when changed cell count reaches this threshold
-      --aftercommand-every <AFTERCOMMAND_EVERY>    Only run aftercommand on every Nth changed frame
+          Only run aftercommand when changed cell count reaches this threshold
+      --aftercommand-every <AFTERCOMMAND_EVERY>
+          Only run aftercommand on every Nth changed frame
       --aftercommand-debounce-ms <AFTERCOMMAND_DEBOUNCE_MS>
-                                                   Debounce aftercommand for this many milliseconds
+          Debounce aftercommand for this many milliseconds
       --aftercommand-timeout-ms <AFTERCOMMAND_TIMEOUT_MS>
-                                                   Kill aftercommand if it exceeds this timeout in milliseconds [default: 3000]
+          Kill aftercommand if it exceeds this timeout in milliseconds [default: 3000]
   -C, --compress
+
   -l, --logfile <LOGFILE>
-      --replay <REPLAY>                            Replay a saved JSONL trace in read-only mode
-      --screenshot-dir <SCREENSHOT_DIR>            [default: /tmp]
-      --screenshot-format <SCREENSHOT_FORMAT>      [default: text] [possible values: text, svg]
-      --snapshot-on <SNAPSHOT_ON>                  Auto-save a snapshot when the screen contains this string
-      --snapshot-on-regex <SNAPSHOT_ON_REGEX>      Auto-save a snapshot when the screen matches this regex
+
+      --replay <REPLAY>
+          Replay a saved JSONL trace in read-only mode
+      --screenshot-dir <SCREENSHOT_DIR>
+          [default: /tmp]
+      --screenshot-format <SCREENSHOT_FORMAT>
+          [default: text] [possible values: text, svg]
+      --snapshot-on <SNAPSHOT_ON>
+          Auto-save a snapshot when the screen contains this string
+      --snapshot-on-regex <SNAPSHOT_ON_REGEX>
+          Auto-save a snapshot when the screen matches this regex
       --snapshot-on-change-cells <SNAPSHOT_ON_CHANGE_CELLS>
-                                                   Auto-save a snapshot when changed cell count reaches this threshold
-      --snapshot-once                              Only trigger automatic snapshot once
-  -s, --shell <SHELL>                              [default: "sh -c"]
-  -d, --differences <DIFFERENCES>                  Diff mode: watch for TUI mode, list/word for batch mode [default: none] [possible values: none, watch, list, word]
-  -L, --limit <LIMIT>                              [default: 500]
-      --checkpoint-interval <CHECKPOINT_INTERVAL>  [default: 12]
-  -h, --help                                       Print help
-  -V, --version                                    Print version
+          Auto-save a snapshot when changed cell count reaches this threshold
+      --snapshot-once
+          Only trigger automatic snapshot once
+  -s, --shell <SHELL>
+          [default: "sh -c"]
+  -d, --differences <DIFFERENCES>
+          Diff mode: watch for TUI mode, list/word for batch mode [default: none] [possible values: none, watch, list, word]
+  -L, --limit <LIMIT>
+          [default: 500]
+      --checkpoint-interval <CHECKPOINT_INTERVAL>
+          [default: 12]
+      --debug
+          Show debug diagnostics in the interactive UI
+  -h, --help
+          Print help
+  -V, --version
+          Print version
 ```
 
 ### Keybind
@@ -126,6 +156,69 @@ Options:
 | `s` | Cycle snapshot format (`text(ANSI)` / `svg`) |
 | `Shift+S` | Toggle selected frame info |
 | `Ctrl+S` | Save selected snapshot |
+
+#### Custom keybind
+
+Remap `twatch` actions with `-K/--keymap` using `KEY=ACTION`.
+Custom keymaps are checked before the built-in passthrough rules, so you can
+override keys such as `Down` and use them for local history navigation.
+
+```bash
+twatch -K ctrl-p=history_pane_up -K ctrl-n=history_pane_down htop
+twatch -K down=history_pane_down htop
+```
+
+Supported actions:
+
+| action | description |
+| --- | --- |
+| `up` / `down` | Move selected view using the current focus |
+| `watch_pane_up` / `watch_pane_down` | Scroll only the watch pane |
+| `history_pane_up` / `history_pane_down` | Move only the history selection |
+| `page_up` / `page_down` | Page move using the current focus |
+| `watch_pane_page_up` / `watch_pane_page_down` | Page scroll only the watch pane |
+| `history_pane_page_up` / `history_pane_page_down` | Page move only the history pane |
+| `move_top` / `move_end` | Jump using the current focus |
+| `watch_pane_move_top` / `watch_pane_move_end` | Jump only the watch pane |
+| `history_pane_move_top` / `history_pane_move_end` | Jump only the history selection |
+| `toggle_focus` | Switch watch/history focus |
+| `focus_watch_pane` / `focus_history_pane` | Focus a specific pane |
+| `quit` | Open the exit dialog |
+| `reset` | Close help/exit or clear the current filter |
+| `delete` | Delete the selected history entry |
+| `clear_except_selected` | Keep only the selected history entry |
+| `cancel` | Match the built-in `Ctrl-c` behavior |
+| `force_cancel` | Exit immediately |
+| `help` | Toggle the help dialog |
+| `toggle_view_history_pane` | Toggle the history pane |
+| `toggle_history_summary` | Toggle selected frame details |
+| `toggle_diff_mode` | Toggle watch diff |
+| `set_diff_mode_none` | Disable diff |
+| `set_diff_mode_watch` | Enable watch diff |
+| `toggle_pause` | Pause or resume capture |
+| `toggle_child_pause` | Pause or resume the wrapped process |
+| `change_filter_mode` | Start plain-text history filtering |
+| `change_regex_filter_mode` | Start regex history filtering |
+| `enter_app_input_mode` | Enter child app input mode |
+| `leave_app_input_mode` | Leave child app input mode |
+| `toggle_inspector` | Toggle the cell inspector |
+| `save_snapshot` | Save the selected snapshot |
+| `cycle_snapshot_format` | Cycle snapshot output format |
+| `scroll_left` / `scroll_right` | Scroll the watch pane horizontally |
+
+#### Child key override
+
+Override keys before they reach the wrapped TUI with `-k/--bind FROM=TO`.
+This follows the `twrap` style: `TO` accepts key names like `up`, `down`,
+`enter`, `f1`, `ctrl-c`, comma-separated key sequences, `text:...`, or
+`screenshot`.
+
+```bash
+twatch -k j=down -k k=up lazygit
+twatch -k ctrl-j=text:gg -k ctrl-t=screenshot nvim
+```
+
+`Ctrl-g` remains reserved for leaving app input mode.
 
 ### Notes
 

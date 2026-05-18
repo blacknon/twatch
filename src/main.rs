@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Blacknon. All rights reserved.
+// Use of this source code is governed by an MIT license
+// that can be found in the LICENSE file.
+
 use std::borrow::Cow;
 use std::fs;
 use std::io::Write;
@@ -16,8 +20,10 @@ use twatch::aftercommand::{AfterCommandConfig, AfterCommandEvent, AfterCommandRu
 use twatch::app::App;
 use twatch::batch;
 use twatch::cli::Cli;
-use twatch::runner::{DemoRunner, FrameSource, PtyRunner, ReplayRunner};
+use twatch::runner::{DemoRunner, FrameSource, PtyRunner, ReplayRunner, SourceEvent};
 use twatch::screen::ScreenSnapshot;
+
+const DEMO_BATCH_INTERVAL: Duration = Duration::from_millis(500);
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -49,8 +55,8 @@ fn run_batch(cli: Cli) -> Result<()> {
     let (width, height) = batch::terminal_size(&cli);
     let mut source = build_source(&cli, SourceBuildMode::Batch, width, height)?;
     let mut aftercommand_runtime = build_batch_aftercommand_runtime(&cli)?;
-
-    let interval = Duration::from_secs_f64(cli.interval.max(0.2));
+    let is_event_driven = source.is_event_driven();
+    let update_rx = source.take_update_receiver();
     let mut stdout = std::io::stdout();
     let mut emitted = 0usize;
     let mut previous = None;
@@ -61,7 +67,15 @@ fn run_batch(cli: Cli) -> Result<()> {
             break;
         }
 
-        std::thread::sleep(interval);
+        if is_event_driven {
+            match wait_for_batch_source_update(update_rx.as_ref(), &*source) {
+                BatchLoopStep::Capture => {}
+                BatchLoopStep::Break => break,
+            }
+        } else {
+            std::thread::sleep(DEMO_BATCH_INTERVAL);
+        }
+
         let frame = source.capture(width, height)?;
         if let Some(runtime) = &mut aftercommand_runtime {
             let changed_cell_count = frame
@@ -89,6 +103,40 @@ fn run_batch(cli: Cli) -> Result<()> {
 
     source.terminate().ok();
     Ok(())
+}
+
+enum BatchLoopStep {
+    Capture,
+    Break,
+}
+
+fn wait_for_batch_source_update(
+    update_rx: Option<&std::sync::mpsc::Receiver<SourceEvent>>,
+    source: &dyn FrameSource,
+) -> BatchLoopStep {
+    let Some(update_rx) = update_rx else {
+        return BatchLoopStep::Capture;
+    };
+
+    loop {
+        match update_rx.recv() {
+            Ok(SourceEvent::Updated) => return BatchLoopStep::Capture,
+            Ok(SourceEvent::Closed) | Err(_) => {
+                return if source.has_pending_update() {
+                    BatchLoopStep::Capture
+                } else {
+                    BatchLoopStep::Break
+                };
+            }
+            Ok(SourceEvent::ClosedWithError(_)) => {
+                return if source.has_pending_update() {
+                    BatchLoopStep::Capture
+                } else {
+                    BatchLoopStep::Break
+                };
+            }
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

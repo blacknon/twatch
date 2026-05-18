@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Blacknon. All rights reserved.
+// Use of this source code is governed by an MIT license
+// that can be found in the LICENSE file.
+
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -5,11 +9,12 @@ use regex::Regex;
 
 use super::{App, DiffMode};
 use crate::aftercommand::{AfterCommandConfig, AfterCommandRuntime};
+use crate::child_bindings::{ChildBinding, compile_child_bindings};
 use crate::cli::Cli;
+use crate::keymap::{KeyBinding, compile_keymap};
 use crate::screenshot::ScreenshotFormat;
 
 pub(super) struct AppConfig {
-    pub interval_secs: f64,
     pub child_pause_supported: bool,
     pub diff_mode: DiffMode,
     pub history_limit: usize,
@@ -26,6 +31,8 @@ pub(super) struct AppConfig {
     pub aftercommand_runtime: Option<AfterCommandRuntime>,
     pub command_display: String,
     pub debug: bool,
+    pub keymap: Vec<KeyBinding>,
+    pub child_bindings: Vec<ChildBinding>,
 }
 
 impl AppConfig {
@@ -46,9 +53,10 @@ impl AppConfig {
             })
             .transpose()?;
         let command_display = App::command_display_from_cli(cli);
+        let keymap = compile_keymap(&cli.keymap).context("invalid --keymap")?;
+        let child_bindings = compile_child_bindings(&cli.bind).context("invalid --bind")?;
 
         Ok(Self {
-            interval_secs: cli.interval,
             child_pause_supported,
             diff_mode: cli.differences.into(),
             history_limit: cli.limit.max(1),
@@ -76,6 +84,8 @@ impl AppConfig {
             }),
             command_display,
             debug: cli.debug,
+            keymap,
+            child_bindings,
         })
     }
 }

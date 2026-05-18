@@ -18,11 +18,8 @@ pub fn default_shell() -> String {
 }
 
 #[derive(Debug, Clone, Parser)]
-#[command(author, version, about = "watch for TUI apps", long_about = None)]
+#[command(author, version, about = "twatch - adds rewindable history to existing TUI applications.", long_about = None)]
 pub struct Cli {
-    #[arg(short = 'n', long, default_value_t = 2.0)]
-    pub interval: f64,
-
     #[arg(short = 'b', long)]
     pub batch: bool,
 
@@ -51,6 +48,22 @@ pub struct Cli {
 
     #[arg(short = 'A', long)]
     pub aftercommand: Option<String>,
+
+    #[arg(
+        short = 'K',
+        long,
+        help = "Remap twatch keys with KEY=ACTION",
+        value_name = "KEY=ACTION"
+    )]
+    pub keymap: Vec<String>,
+
+    #[arg(
+        short = 'k',
+        long,
+        help = "Override child TUI keys with FROM=TO",
+        value_name = "FROM=TO"
+    )]
+    pub bind: Vec<String>,
 
     #[arg(long, help = "Only run aftercommand when output matches this regex")]
     pub aftercommand_regex: Option<String>,

@@ -1,12 +1,18 @@
+// Copyright (c) 2026 Blacknon. All rights reserved.
+// Use of this source code is governed by an MIT license
+// that can be found in the LICENSE file.
+
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::aftercommand::AfterCommandRuntime;
+use crate::child_bindings::ChildBinding;
 use crate::cli::{DiffModeArg, ScreenshotFormatArg};
 use crate::history::HistoryMetadata;
 use crate::history::HistoryStore;
+use crate::keymap::KeyBinding;
 use crate::runner::FrameSource;
 use crate::screen::ScreenSnapshot;
 use crate::screenshot::ScreenshotFormat;
@@ -280,7 +286,6 @@ impl InputTraceEvent {
 }
 
 pub struct App {
-    pub interval_secs: f64,
     pub debug: bool,
     pub paused: bool,
     pub child_paused: bool,
@@ -310,8 +315,9 @@ pub struct App {
     snapshot_trigger_fired: bool,
     aftercommand_runtime: Option<AfterCommandRuntime>,
     command_display: String,
+    keymap: Vec<KeyBinding>,
+    child_bindings: Vec<ChildBinding>,
     source: Box<dyn FrameSource>,
-    last_tick: Instant,
     last_mouse_input: Option<Instant>,
     last_mouse_scroll_input: Option<Instant>,
     pending_mouse_escape: Option<BrokenMouseEscape>,

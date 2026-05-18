@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Blacknon. All rights reserved.
+// Use of this source code is governed by an MIT license
+// that can be found in the LICENSE file.
+
 use super::{App, FilterMode, FocusPane};
 use crate::cli::{Cli, DiffModeArg, ScreenshotFormatArg};
 use crate::logging::{LogRecord, append_record};
@@ -19,6 +23,7 @@ struct MockSource {
     mouse_passthrough_enabled: bool,
     view_snapshot_requests: Arc<Mutex<Vec<usize>>>,
     key_events: Arc<Mutex<Vec<KeyEvent>>>,
+    byte_events: Arc<Mutex<Vec<Vec<u8>>>>,
     mouse_events: Arc<Mutex<Vec<MouseEvent>>>,
 }
 
@@ -32,6 +37,7 @@ impl MockSource {
             mouse_passthrough_enabled: true,
             view_snapshot_requests: Arc::new(Mutex::new(Vec::new())),
             key_events: Arc::new(Mutex::new(Vec::new())),
+            byte_events: Arc::new(Mutex::new(Vec::new())),
             mouse_events: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -45,6 +51,7 @@ impl MockSource {
             mouse_passthrough_enabled: false,
             view_snapshot_requests: Arc::new(Mutex::new(Vec::new())),
             key_events: Arc::new(Mutex::new(Vec::new())),
+            byte_events: Arc::new(Mutex::new(Vec::new())),
             mouse_events: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -58,6 +65,7 @@ impl MockSource {
             mouse_passthrough_enabled: true,
             view_snapshot_requests: Arc::new(Mutex::new(Vec::new())),
             key_events: Arc::new(Mutex::new(Vec::new())),
+            byte_events: Arc::new(Mutex::new(Vec::new())),
             mouse_events: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -101,6 +109,11 @@ impl FrameSource for MockSource {
 
     fn send_key(&mut self, key: KeyEvent) -> Result<()> {
         self.key_events.lock().unwrap().push(key);
+        Ok(())
+    }
+
+    fn send_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        self.byte_events.lock().unwrap().push(bytes.to_vec());
         Ok(())
     }
 
@@ -1117,6 +1130,68 @@ fn key_passthrough_is_allowed_when_following_latest() {
 }
 
 #[test]
+fn custom_keymap_can_override_watch_passthrough() {
+    let mut cli = test_cli();
+    cli.keymap = vec!["down=history_pane_down".to_string()];
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![
+            frame("a", &["one"]),
+            frame("b", &["two"]),
+            frame("c", &["three"]),
+        ])),
+    )
+    .unwrap();
+
+    app.capture(20, 5).unwrap();
+    app.capture(20, 5).unwrap();
+    app.capture(20, 5).unwrap();
+    app.ui.focus = FocusPane::Watch;
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+        .unwrap();
+
+    assert!(!app.follow_latest);
+    assert_eq!(app.selected_index, 1);
+}
+
+#[test]
+fn child_bindings_remap_passthrough_keys_to_raw_bytes() {
+    let mut cli = test_cli();
+    cli.bind = vec!["j=down".to_string()];
+    let source = MockSource::new(vec![frame("a", &["one"])]);
+    let byte_events = source.byte_events.clone();
+    let key_events = source.key_events.clone();
+    let mut app = App::new(&cli, Box::new(source)).unwrap();
+
+    app.capture(20, 5).unwrap();
+    app.ui.app_input_mode = true;
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE))
+        .unwrap();
+
+    assert_eq!(key_events.lock().unwrap().len(), 1);
+    assert!(byte_events.lock().unwrap().is_empty());
+    assert_eq!(key_events.lock().unwrap()[0].code, KeyCode::Down);
+}
+
+#[test]
+fn ctrl_g_remains_reserved_to_leave_app_input_mode() {
+    let mut cli = test_cli();
+    cli.bind = vec!["ctrl-g=text:gg".to_string()];
+    let source = MockSource::new(vec![frame("a", &["one"])]);
+    let byte_events = source.byte_events.clone();
+    let mut app = App::new(&cli, Box::new(source)).unwrap();
+
+    app.capture(20, 5).unwrap();
+    app.ui.app_input_mode = true;
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL))
+        .unwrap();
+    assert!(byte_events.lock().unwrap().is_empty());
+    assert!(!app.ui.app_input_mode);
+}
+
+#[test]
 fn app_input_mode_is_available_only_on_latest() {
     let mut app = App::new(
         &test_cli(),
@@ -1471,7 +1546,6 @@ fn history_snapshots_preserve_cursor_state() {
 
 fn test_cli() -> Cli {
     Cli {
-        interval: 2.0,
         batch: false,
         batch_count: None,
         batch_size: None,
@@ -1479,6 +1553,8 @@ fn test_cli() -> Cli {
         batch_diff_only: false,
         batch_no_color: false,
         aftercommand: None,
+        keymap: Vec::new(),
+        bind: Vec::new(),
         aftercommand_regex: None,
         aftercommand_change_cells: None,
         aftercommand_every: None,

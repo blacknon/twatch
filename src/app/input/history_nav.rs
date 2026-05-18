@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Blacknon. All rights reserved.
+// Use of this source code is governed by an MIT license
+// that can be found in the LICENSE file.
+
 use crate::app::{App, FocusPane};
 
 impl App {
@@ -91,7 +95,7 @@ impl App {
         self.follow_latest = false;
     }
 
-    fn move_history_by(&mut self, offset: isize) {
+    pub(super) fn move_history_by(&mut self, offset: isize) {
         if self.filtered.is_empty() {
             return;
         }
