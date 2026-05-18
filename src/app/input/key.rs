@@ -52,15 +52,15 @@ impl App {
             if !self.follow_latest {
                 return Ok(false);
             }
-            if let Some(action) = self.find_child_binding_action(key) {
-                self.apply_child_binding(key, action)?;
-                return Ok(false);
-            }
             if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('g') {
                 self.ui.app_input_mode = false;
             } else {
-                self.record_child_key_event(key);
-                self.source.send_key(key)?;
+                if let Some(action) = self.find_child_binding_action(key) {
+                    self.apply_child_binding(key, action)?;
+                } else {
+                    self.record_child_key_event(key);
+                    self.source.send_key(key)?;
+                }
             }
             return Ok(false);
         }

@@ -5,10 +5,10 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
 use super::{App, DiffMode, FilterMode, FocusPane, InputMode};
-use crate::child_bindings::ChildBindingAction;
+use crate::child_bindings::{ChildBindingAction, ChildBindingKey};
 use crate::input_key::KeyPress;
 use crate::keymap::KeyAction;
 
@@ -172,9 +172,21 @@ impl App {
 
     fn apply_child_binding(&mut self, key: KeyEvent, action: ChildBindingAction) -> Result<()> {
         match action {
-            ChildBindingAction::Send(bytes) => {
+            ChildBindingAction::SendKeys(keys) => {
                 self.record_child_key_event(key);
-                self.source.send_bytes(&bytes)?;
+                for item in keys {
+                    match item {
+                        ChildBindingKey::Press(press) => {
+                            self.source.send_key(KeyEvent {
+                                code: press.code,
+                                modifiers: press.modifiers,
+                                kind: KeyEventKind::Press,
+                                state: KeyEventState::NONE,
+                            })?;
+                        }
+                        ChildBindingKey::Bytes(bytes) => self.source.send_bytes(&bytes)?,
+                    }
+                }
             }
             ChildBindingAction::SaveSnapshot => self.save_snapshot()?,
         }

@@ -8,8 +8,14 @@ use crate::input_key::{KeyPress, parse_key_bytes, parse_key_press};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ChildBindingAction {
-    Send(Vec<u8>),
+    SendKeys(Vec<ChildBindingKey>),
     SaveSnapshot,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ChildBindingKey {
+    Press(KeyPress),
+    Bytes(Vec<u8>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -37,20 +43,29 @@ fn parse_child_binding_action(value: &str) -> Result<ChildBindingAction> {
     }
 
     if let Some(text) = value.strip_prefix("text:") {
-        return Ok(ChildBindingAction::Send(text.as_bytes().to_vec()));
+        return Ok(ChildBindingAction::SendKeys(vec![ChildBindingKey::Bytes(
+            text.as_bytes().to_vec(),
+        )]));
     }
 
     let key_list = value.strip_prefix("send:").unwrap_or(value);
-    let mut bytes = Vec::new();
+    let mut keys = Vec::new();
     for item in key_list.split(',') {
-        bytes.extend_from_slice(&parse_key_bytes(item.trim())?);
+        let item = item.trim();
+        if let Ok(press) = parse_key_press(item) {
+            keys.push(ChildBindingKey::Press(press));
+        } else {
+            keys.push(ChildBindingKey::Bytes(parse_key_bytes(item)?));
+        }
     }
-    Ok(ChildBindingAction::Send(bytes))
+    Ok(ChildBindingAction::SendKeys(keys))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ChildBindingAction, compile_child_bindings};
+    use super::{ChildBindingAction, ChildBindingKey, compile_child_bindings};
+    use crate::input_key::KeyPress;
+    use crossterm::event::{KeyCode, KeyModifiers};
 
     #[test]
     fn parses_twrap_style_bindings() {
@@ -61,20 +76,17 @@ mod tests {
         ])
         .unwrap();
 
-        assert!(
-            bindings
-                .iter()
-                .any(|binding| binding.action == ChildBindingAction::Send(b"\x1b[B".to_vec()))
-        );
+        assert!(bindings.iter().any(|binding| binding.action
+            == ChildBindingAction::SendKeys(vec![ChildBindingKey::Press(KeyPress {
+                code: KeyCode::Down,
+                modifiers: KeyModifiers::NONE,
+            })])));
         assert!(
             bindings
                 .iter()
                 .any(|binding| binding.action == ChildBindingAction::SaveSnapshot)
         );
-        assert!(
-            bindings
-                .iter()
-                .any(|binding| binding.action == ChildBindingAction::Send(b"gg".to_vec()))
-        );
+        assert!(bindings.iter().any(|binding| binding.action
+            == ChildBindingAction::SendKeys(vec![ChildBindingKey::Bytes(b"gg".to_vec())])));
     }
 }

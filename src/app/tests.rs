@@ -1169,17 +1169,14 @@ fn child_bindings_remap_passthrough_keys_to_raw_bytes() {
     app.handle_key_event(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE))
         .unwrap();
 
-    assert!(key_events.lock().unwrap().is_empty());
-    assert_eq!(
-        byte_events.lock().unwrap().as_slice(),
-        &[b"\x1b[B".to_vec()]
-    );
+    assert_eq!(key_events.lock().unwrap().len(), 1);
+    assert!(byte_events.lock().unwrap().is_empty());
+    assert_eq!(key_events.lock().unwrap()[0].code, KeyCode::Down);
 }
 
 #[test]
-fn custom_leave_app_input_mode_key_works_with_child_bindings() {
+fn ctrl_g_remains_reserved_to_leave_app_input_mode() {
     let mut cli = test_cli();
-    cli.keymap = vec!["ctrl-t=leave_app_input_mode".to_string()];
     cli.bind = vec!["ctrl-g=text:gg".to_string()];
     let source = MockSource::new(vec![frame("a", &["one"])]);
     let byte_events = source.byte_events.clone();
@@ -1190,11 +1187,7 @@ fn custom_leave_app_input_mode_key_works_with_child_bindings() {
 
     app.handle_key_event(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL))
         .unwrap();
-    assert_eq!(byte_events.lock().unwrap().as_slice(), &[b"gg".to_vec()]);
-    assert!(app.ui.app_input_mode);
-
-    app.handle_key_event(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL))
-        .unwrap();
+    assert!(byte_events.lock().unwrap().is_empty());
     assert!(!app.ui.app_input_mode);
 }
 

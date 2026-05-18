@@ -215,8 +215,10 @@ This follows the `twrap` style: `TO` accepts key names like `up`, `down`,
 
 ```bash
 twatch -k j=down -k k=up lazygit
-twatch -k ctrl-g=text:gg -k ctrl-t=screenshot nvim
+twatch -k ctrl-j=text:gg -k ctrl-t=screenshot nvim
 ```
+
+`Ctrl-g` remains reserved for leaving app input mode.
 
 ### Notes
 
