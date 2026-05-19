@@ -178,7 +178,31 @@ struct SerializableCell {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
+struct SnapshotRunSerde {
+    style_id: u32,
+    text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    symbols: Vec<Symbol>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct RowSnapshotSerde {
+    width: u16,
+    height: u16,
+    rows: Vec<Vec<SnapshotRunSerde>>,
+    styles: Vec<Style>,
+    cursor_x: u16,
+    cursor_y: u16,
+    cursor_visible: bool,
+    alternate_screen: bool,
+    scrollback_offset: usize,
+    mouse_reporting: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 struct CompactSnapshotSerde {
     width: u16,
     height: u16,
@@ -193,7 +217,7 @@ struct CompactSnapshotSerde {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 struct LegacySnapshotSerde {
     width: u16,
     height: u16,
@@ -209,6 +233,7 @@ struct LegacySnapshotSerde {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
 #[serde(untagged)]
 enum SnapshotSerde {
+    Rows(RowSnapshotSerde),
     Compact(CompactSnapshotSerde),
     Legacy(LegacySnapshotSerde),
 }
@@ -483,17 +508,66 @@ impl Serialize for ScreenSnapshot {
     where
         S: Serializer,
     {
-        CompactSnapshotSerde {
+        let mut rows = Vec::with_capacity(self.height as usize);
+        for y in 0..self.height {
+            let mut row_runs = Vec::new();
+            let mut current_run: Option<SnapshotRunSerde> = None;
+            for x in 0..self.width {
+                let cell = &self.cells[usize::from(y) * usize::from(self.width) + usize::from(x)];
+                let symbol_text = cell.symbol.as_str();
+                let can_use_text = symbol_text.chars().count() == 1 && !cell.symbol.is_empty();
+
+                match &mut current_run {
+                    Some(run)
+                        if run.style_id == cell.style_id
+                            && ((run.symbols.is_empty() && can_use_text)
+                                || (!run.symbols.is_empty() && !can_use_text)) =>
+                    {
+                        if can_use_text {
+                            run.text.push_str(symbol_text);
+                        } else {
+                            run.symbols.push(cell.symbol.clone());
+                        }
+                    }
+                    Some(run) => {
+                        row_runs.push(std::mem::take(run));
+                        let mut next_run = SnapshotRunSerde {
+                            style_id: cell.style_id,
+                            text: String::new(),
+                            symbols: Vec::new(),
+                        };
+                        if can_use_text {
+                            next_run.text.push_str(symbol_text);
+                        } else {
+                            next_run.symbols.push(cell.symbol.clone());
+                        }
+                        *run = next_run;
+                    }
+                    None => {
+                        let mut run = SnapshotRunSerde {
+                            style_id: cell.style_id,
+                            text: String::new(),
+                            symbols: Vec::new(),
+                        };
+                        if can_use_text {
+                            run.text.push_str(symbol_text);
+                        } else {
+                            run.symbols.push(cell.symbol.clone());
+                        }
+                        current_run = Some(run);
+                    }
+                }
+            }
+            if let Some(run) = current_run.take() {
+                row_runs.push(run);
+            }
+            rows.push(row_runs);
+        }
+
+        RowSnapshotSerde {
             width: self.width,
             height: self.height,
-            cells: self
-                .cells
-                .iter()
-                .map(|cell| SerializableCell {
-                    symbol: cell.symbol.clone(),
-                    style_id: cell.style_id,
-                })
-                .collect(),
+            rows,
             styles: self.styles.clone(),
             cursor_x: self.cursor_x,
             cursor_y: self.cursor_y,
@@ -512,6 +586,47 @@ impl<'de> Deserialize<'de> for ScreenSnapshot {
         D: Deserializer<'de>,
     {
         match SnapshotSerde::deserialize(deserializer)? {
+            SnapshotSerde::Rows(value) => {
+                let mut snapshot = Self::new(value.width, value.height);
+                snapshot.cursor_x = value.cursor_x;
+                snapshot.cursor_y = value.cursor_y;
+                snapshot.cursor_visible = value.cursor_visible;
+                snapshot.alternate_screen = value.alternate_screen;
+                snapshot.scrollback_offset = value.scrollback_offset;
+                snapshot.mouse_reporting = value.mouse_reporting;
+                snapshot.styles = if value.styles.is_empty() {
+                    vec![Style::default()]
+                } else {
+                    value.styles
+                };
+
+                for (y, row) in value.rows.into_iter().enumerate() {
+                    if y >= usize::from(snapshot.height) {
+                        break;
+                    }
+                    let mut x = 0usize;
+                    for run in row {
+                        let symbols: Vec<Symbol> = if run.symbols.is_empty() {
+                            run.text.chars().map(Symbol::from).collect()
+                        } else {
+                            run.symbols
+                        };
+                        for symbol in symbols {
+                            if x >= usize::from(snapshot.width) {
+                                break;
+                            }
+                            let idx = y * usize::from(snapshot.width) + x;
+                            snapshot.cells[idx] = CompactCell {
+                                symbol,
+                                style_id: run.style_id,
+                            };
+                            x += 1;
+                        }
+                    }
+                }
+
+                Ok(snapshot)
+            }
             SnapshotSerde::Compact(value) => Ok(Self {
                 width: value.width,
                 height: value.height,
@@ -642,5 +757,18 @@ mod tests {
 
         assert_eq!(snapshot.cursor_position(), (2, 1));
         assert!(snapshot.cursor_visible());
+    }
+
+    #[test]
+    fn serializes_snapshots_as_row_runs() {
+        let snapshot = ScreenSnapshot::from_text_lines(6, 2, &["aa  bb", "cccccc"]);
+
+        let json = serde_json::to_string(&snapshot).unwrap();
+        assert!(json.contains("\"rows\""));
+        assert!(json.contains("\"styles\""));
+        assert!(!json.contains("\"cells\""));
+
+        let restored: ScreenSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.lines(), snapshot.lines());
     }
 }

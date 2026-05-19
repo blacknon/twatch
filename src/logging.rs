@@ -750,6 +750,7 @@ pub fn compact_active_log(path: &str, retain_recent_records: usize) -> Result<()
 
 enum LogRecordStreamSource {
     Reader(Box<dyn BufRead + Send>),
+    Readers(VecDeque<Box<dyn BufRead + Send>>),
     Queue(VecDeque<StoredLogRecord>),
 }
 
@@ -766,18 +767,12 @@ impl LogRecordStream {
         } else if let Some(spill_path) = active_spill_path(path)
             && Path::new(&spill_path).exists()
         {
-            let mut records = load_stored_records_from_path(&spill_path)?;
-            records.extend(load_stored_records_from_path(path)?);
-            LogRecordStreamSource::Queue(VecDeque::from(records))
+            let mut readers = VecDeque::new();
+            readers.push_back(open_log_reader(&spill_path)?);
+            readers.push_back(open_log_reader(path)?);
+            LogRecordStreamSource::Readers(readers)
         } else {
-            let file =
-                File::open(path).with_context(|| format!("failed to open logfile: {path}"))?;
-            let reader: Box<dyn BufRead + Send> = if is_gzip_log_path(path) {
-                Box::new(BufReader::new(MultiGzDecoder::new(file)))
-            } else {
-                Box::new(BufReader::new(file))
-            };
-            LogRecordStreamSource::Reader(reader)
+            LogRecordStreamSource::Reader(open_log_reader(path)?)
         };
         Ok(Self {
             source,
@@ -813,6 +808,27 @@ impl LogRecordStream {
                     Ok(None)
                 }
             }
+            LogRecordStreamSource::Readers(readers) => loop {
+                let Some(reader) = readers.front_mut() else {
+                    return Ok(None);
+                };
+                let mut line = String::new();
+                let bytes = reader
+                    .read_line(&mut line)
+                    .context("failed to read log line")?;
+                if bytes == 0 {
+                    readers.pop_front();
+                    continue;
+                }
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let stored: StoredLogRecord =
+                    serde_json::from_str(&line).context("failed to parse jsonl log record")?;
+                let record = stored.into_log_record(self.previous_snapshot.as_ref())?;
+                self.previous_snapshot = Some(record.snapshot.clone());
+                return Ok(Some(record));
+            },
             LogRecordStreamSource::Reader(reader) => loop {
                 let mut line = String::new();
                 let bytes = reader
@@ -847,6 +863,15 @@ pub fn load_records(path: &str) -> Result<Vec<LogRecord>> {
     }
 
     Ok(records)
+}
+
+fn open_log_reader(path: &str) -> Result<Box<dyn BufRead + Send>> {
+    let file = File::open(path).with_context(|| format!("failed to open logfile: {path}"))?;
+    if is_gzip_log_path(path) {
+        Ok(Box::new(BufReader::new(MultiGzDecoder::new(file))))
+    } else {
+        Ok(Box::new(BufReader::new(file)))
+    }
 }
 
 fn is_gzip_log_path(path: &str) -> bool {
@@ -1257,6 +1282,51 @@ mod tests {
         assert_eq!(loaded.len(), 10);
         assert_eq!(loaded.first().unwrap().label, "f0");
         assert_eq!(loaded.last().unwrap().label, "f9");
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(spill);
+    }
+
+    #[test]
+    fn stream_reads_spill_and_tail_sequentially() {
+        let path =
+            std::env::temp_dir().join(format!("twatch-stream-spill-{}.jsonl", std::process::id()));
+        let spill = active_spill_path(path.to_str().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&spill);
+
+        let mut previous: Option<ScreenSnapshot> = None;
+        for index in 0..6u64 {
+            let record = LogRecord {
+                label: format!("f{index}"),
+                changed: true,
+                timestamp_unix_ms: index + 1,
+                frame_seq: index + 1,
+                width: 8,
+                height: 1,
+                changed_cell_count: 1,
+                input_event_count_since_prev: 0,
+                resized: false,
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: "stdin".to_string(),
+                snapshot: ScreenSnapshot::from_text_lines(8, 1, &[&format!("line-{index}")]),
+            };
+            append_delta_record(path.to_str().unwrap(), &record, previous.as_ref(), 120).unwrap();
+            previous = Some(record.snapshot);
+        }
+
+        compact_active_log(path.to_str().unwrap(), 2).unwrap();
+
+        let mut stream = LogRecordStream::open(path.to_str().unwrap()).unwrap();
+        let mut labels = Vec::new();
+        while let Some(record) = stream.next_record().unwrap() {
+            labels.push(record.label);
+        }
+
+        assert_eq!(labels, vec!["f0", "f1", "f2", "f3", "f4", "f5"]);
 
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(spill);
