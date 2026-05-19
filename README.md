@@ -97,6 +97,10 @@ Options:
 
       --replay <REPLAY>
           Replay a saved JSONL trace in read-only mode
+      --record-stdin
+          Record terminal output from stdin without spawning a child PTY
+      --size <WIDTH,HEIGHT>
+          Use a fixed terminal size for stdin recording
       --screenshot-dir <SCREENSHOT_DIR>
           [default: /tmp]
       --screenshot-format <SCREENSHOT_FORMAT>
@@ -116,7 +120,7 @@ Options:
   -L, --limit <LIMIT>
           [default: 500]
       --checkpoint-interval <CHECKPOINT_INTERVAL>
-          [default: 12]
+          [default: 120]
       --debug
           Show debug diagnostics in the interactive UI
   -h, --help
@@ -311,6 +315,15 @@ This is useful for debugging long-running screens outside the live UI.
 
 ```bash
 twatch --logfile ./twatch.jsonl htop
+```
+
+### Stdin recorder
+
+Record terminal output from stdin into a JSONL trace without launching a child PTY.
+This is the backend intended for tmux `pipe-pane` style integrations.
+
+```bash
+tmux pipe-pane -o "twatch --record-stdin --size '#{pane_width},#{pane_height}' --logfile '$HOME/.local/state/twatch/tmux/pane-12.jsonl'"
 ```
 
 ### Replay mode

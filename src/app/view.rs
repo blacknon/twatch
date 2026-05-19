@@ -11,11 +11,19 @@ impl App {
     }
 
     pub fn visible_history_len(&self) -> usize {
-        self.history_len().min(self.limit)
+        if self.limit == 0 {
+            self.history_len()
+        } else {
+            self.history_len().min(self.limit)
+        }
     }
 
     pub(super) fn visible_history_start(&self) -> usize {
-        self.history_len().saturating_sub(self.limit)
+        if self.limit == 0 {
+            0
+        } else {
+            self.history_len().saturating_sub(self.limit)
+        }
     }
 
     pub fn selected_snapshot(&self) -> Option<ScreenSnapshot> {

@@ -59,7 +59,7 @@ impl AppConfig {
         Ok(Self {
             child_pause_supported,
             diff_mode: cli.differences.into(),
-            history_limit: cli.limit.max(1),
+            history_limit: cli.limit,
             checkpoint_interval: cli.checkpoint_interval.max(1),
             compress: cli.compress,
             logfile: cli.replay.clone().or(cli.logfile.clone()),

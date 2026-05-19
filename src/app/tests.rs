@@ -615,6 +615,27 @@ fn history_overlay_row_selection_accounts_for_window_offset() {
 }
 
 #[test]
+fn limit_zero_keeps_full_history_visible() {
+    let mut cli = test_cli();
+    cli.limit = 0;
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(
+            (0..80).map(|i| frame(&format!("{i:04}"), &["x"])).collect(),
+        )),
+    )
+    .unwrap();
+
+    for _ in 0..80 {
+        app.capture(20, 5).unwrap();
+    }
+
+    assert_eq!(app.visible_history_start(), 0);
+    assert_eq!(app.visible_history_len(), app.history_len());
+    assert!(app.history_len() >= 79);
+}
+
+#[test]
 fn mouse_passthrough_is_blocked_when_not_following_latest() {
     let source = MockSource::new(vec![frame("a", &["one"])]);
     let mouse_events = source.mouse_events.clone();
@@ -1374,6 +1395,60 @@ fn replay_mode_loads_existing_log() {
 }
 
 #[test]
+fn replay_mode_prefetches_initial_frames_and_defers_rest() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-replay-prefetch");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    for index in 0..300u64 {
+        append_record(
+            cli.replay.as_deref().unwrap(),
+            &LogRecord {
+                label: format!("frame-{index}"),
+                changed: true,
+                timestamp_unix_ms: index + 1,
+                frame_seq: index + 1,
+                width: 20,
+                height: 5,
+                changed_cell_count: 1,
+                input_event_count_since_prev: 0,
+                resized: false,
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: String::new(),
+                snapshot: ScreenSnapshot::from_text_lines(20, 5, &[&format!("line-{index}")]),
+            },
+        )
+        .unwrap();
+    }
+
+    let app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+
+    assert_eq!(
+        app.metadata.len() + usize::from(app.current_snapshot.is_some()),
+        super::state::REPLAY_INITIAL_LOAD_FRAMES
+    );
+    assert!(app.replay_loader.is_some());
+    assert!(app.replay_loading);
+    assert_eq!(app.current_label(), Some("frame-255"));
+    assert_eq!(
+        app.ui.status_message.as_deref(),
+        Some("replay loading: 256 frames ready, more loading in background")
+    );
+
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn save_snapshot_uses_configured_directory_and_format() {
     let mut cli = test_cli();
     let dir = unique_temp_dir("twatch-shot-test");
@@ -1563,6 +1638,12 @@ fn test_cli() -> Cli {
         compress: false,
         logfile: None,
         replay: None,
+        pack_logfile: None,
+        pack_output: None,
+        record_stdin: false,
+        record_stdin_spill_every: 64,
+        record_stdin_spill_retain: 32,
+        size: None,
         screenshot_dir: "/tmp".to_string(),
         screenshot_format: ScreenshotFormatArg::Text,
         snapshot_on: None,

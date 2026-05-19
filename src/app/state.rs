@@ -3,12 +3,15 @@
 // that can be found in the LICENSE file.
 
 use anyhow::Result;
+use std::sync::mpsc;
 
 use super::config::AppConfig;
-use super::{App, AppHistoryMetadata, FilterMode, InputMode};
+use super::{App, AppHistoryMetadata, FilterMode, InputMode, ReplayLoadMessage};
 use crate::cli::Cli;
 use crate::history::HistoryStore;
 use crate::runner::FrameSource;
+
+pub(super) const REPLAY_INITIAL_LOAD_FRAMES: usize = 256;
 
 impl App {
     pub fn new(cli: &Cli, source: Box<dyn FrameSource>) -> Result<Self> {
@@ -46,6 +49,9 @@ impl App {
             keymap: config.keymap,
             child_bindings: config.child_bindings,
             source,
+            replay_loader: None,
+            replay_loader_rx: None,
+            replay_loading: false,
             last_mouse_input: None,
             last_mouse_scroll_input: None,
             pending_mouse_escape: None,
@@ -57,8 +63,49 @@ impl App {
             ui: super::UiState::new(),
         };
 
-        app.load_history_from_log()?;
+        if config.replay_mode {
+            app.load_history_from_replay_log_prefetch()?;
+        } else {
+            app.load_history_from_log()?;
+        }
         Ok(app)
+    }
+
+    pub(super) fn start_replay_loader(&mut self) {
+        let Some(mut loader) = self.replay_loader.take() else {
+            return;
+        };
+        let (tx, rx) = mpsc::channel();
+        self.replay_loader_rx = Some(rx);
+        self.replay_loading = true;
+        std::thread::spawn(move || {
+            const CHUNK_SIZE: usize = 256;
+            loop {
+                let mut chunk = Vec::with_capacity(CHUNK_SIZE);
+                for _ in 0..CHUNK_SIZE {
+                    match loader.next_record() {
+                        Ok(Some(record)) => chunk.push(record),
+                        Ok(None) => {
+                            if !chunk.is_empty()
+                                && tx.send(ReplayLoadMessage::Records(chunk)).is_err()
+                            {
+                                return;
+                            }
+                            let _ = tx.send(ReplayLoadMessage::Finished);
+                            return;
+                        }
+                        Err(err) => {
+                            let _ = tx.send(ReplayLoadMessage::Failed(err.to_string()));
+                            return;
+                        }
+                    }
+                }
+
+                if tx.send(ReplayLoadMessage::Records(chunk)).is_err() {
+                    return;
+                }
+            }
+        });
     }
 
     pub(super) fn command_display_from_cli(cli: &Cli) -> String {
@@ -134,10 +181,16 @@ impl App {
     }
 
     pub(super) fn trim_slack(&self) -> usize {
+        if self.limit == 0 {
+            return 0;
+        }
         self.limit.min(self.checkpoint_interval.max(32))
     }
 
     pub(super) fn trim_trigger_len(&self) -> usize {
+        if self.limit == 0 {
+            return usize::MAX;
+        }
         self.limit.saturating_add(self.trim_slack())
     }
 

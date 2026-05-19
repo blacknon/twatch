@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::aftercommand::AfterCommandRuntime;
@@ -13,6 +14,7 @@ use crate::cli::{DiffModeArg, ScreenshotFormatArg};
 use crate::history::HistoryMetadata;
 use crate::history::HistoryStore;
 use crate::keymap::KeyBinding;
+use crate::logging::{LogRecord, LogRecordStream};
 use crate::runner::FrameSource;
 use crate::screen::ScreenSnapshot;
 use crate::screenshot::ScreenshotFormat;
@@ -35,6 +37,15 @@ enum AppEvent {
     Terminal(crossterm::event::Event),
     SourceUpdated,
     SourceClosed(Option<String>),
+    ReplayRecordsLoaded(Vec<LogRecord>),
+    ReplayLoadFinished,
+    ReplayLoadFailed(String),
+}
+
+enum ReplayLoadMessage {
+    Records(Vec<LogRecord>),
+    Finished,
+    Failed(String),
 }
 
 enum LoopControl {
@@ -318,6 +329,9 @@ pub struct App {
     keymap: Vec<KeyBinding>,
     child_bindings: Vec<ChildBinding>,
     source: Box<dyn FrameSource>,
+    replay_loader: Option<LogRecordStream>,
+    replay_loader_rx: Option<mpsc::Receiver<ReplayLoadMessage>>,
+    replay_loading: bool,
     last_mouse_input: Option<Instant>,
     last_mouse_scroll_input: Option<Instant>,
     pending_mouse_escape: Option<BrokenMouseEscape>,

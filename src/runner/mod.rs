@@ -14,8 +14,10 @@ use crate::screen::ScreenSnapshot;
 
 mod capture_hook;
 mod encode;
+mod pipe;
 mod pty;
 
+pub use pipe::PipeRunner;
 pub use pty::PtyRunner;
 
 const TIME_FORMAT: &[FormatItem<'static>] =
@@ -221,7 +223,9 @@ pub(crate) fn unix_timestamp_millis() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{DemoRunner, FrameSource, ReplayRunner};
+    use std::io::Cursor;
+
+    use super::{DemoRunner, FrameSource, PipeRunner, ReplayRunner};
     use crate::logging::{LogRecord, append_record};
     use crate::runner::capture_hook::parse_shell;
     use crate::screen::ScreenSnapshot;
@@ -318,5 +322,23 @@ mod tests {
         };
         assert!(!replay.supports_child_pause());
         assert!(replay.toggle_child_pause().unwrap().is_none());
+    }
+
+    #[test]
+    fn pipe_runner_captures_terminal_stream() {
+        let reader = Cursor::new(b"hello\r\nworld".to_vec());
+        let mut runner = PipeRunner::from_reader(Box::new(reader), 20, 5);
+        let update_rx = runner.take_update_receiver().unwrap();
+
+        while let Ok(event) = update_rx.recv() {
+            if matches!(event, super::SourceEvent::Closed) {
+                break;
+            }
+        }
+
+        let frame = FrameSource::capture(&mut runner, 20, 5).unwrap();
+        assert!(frame.raw_output.starts_with("hello"));
+        assert!(frame.raw_output.contains("world"));
+        assert!(frame.changed);
     }
 }

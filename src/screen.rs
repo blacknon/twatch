@@ -5,7 +5,7 @@
 use std::fmt;
 
 use ratatui::style::{Color, Modifier, Style as TuiStyle};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub enum TermColor {
@@ -56,31 +56,169 @@ impl Style {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum Symbol {
+    #[default]
+    Empty,
+    Inline {
+        len: u8,
+        bytes: [u8; 4],
+    },
+    Heap(Box<str>),
+}
+
+impl Symbol {
+    pub fn new(value: &str) -> Self {
+        if value.is_empty() {
+            return Self::Empty;
+        }
+        if value.len() <= 4 {
+            let mut bytes = [0u8; 4];
+            bytes[..value.len()].copy_from_slice(value.as_bytes());
+            return Self::Inline {
+                len: value.len() as u8,
+                bytes,
+            };
+        }
+        Self::Heap(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Empty => "",
+            Self::Inline { len, bytes } => std::str::from_utf8(&bytes[..usize::from(*len)])
+                .expect("inline symbol must be valid utf-8"),
+            Self::Heap(value) => value,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        matches!(self, Self::Empty)
+    }
+
+    pub fn is_blank(&self) -> bool {
+        self.as_str().trim().is_empty()
+    }
+}
+
+impl From<&str> for Symbol {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<String> for Symbol {
+    fn from(value: String) -> Self {
+        Self::new(&value)
+    }
+}
+
+impl From<char> for Symbol {
+    fn from(value: char) -> Self {
+        let mut buffer = [0u8; 4];
+        let encoded = value.encode_utf8(&mut buffer);
+        Self::new(encoded)
+    }
+}
+
+impl Serialize for Symbol {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for Symbol {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(Self::from(value))
+    }
+}
+
+impl fmt::Display for Symbol {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Cell {
-    pub symbol: String,
+    pub symbol: Symbol,
     pub style: Style,
 }
 
 impl Cell {
     pub fn blank() -> Self {
         Self {
-            symbol: " ".to_string(),
+            symbol: Symbol::from(' '),
             style: Style::default(),
         }
     }
 
     pub fn is_blank(&self) -> bool {
-        self.symbol.trim().is_empty()
+        self.symbol.is_blank()
     }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct CompactCell {
+    symbol: Symbol,
+    style_id: u32,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+struct SerializableCell {
+    symbol: Symbol,
+    style_id: u32,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct ScreenSnapshot {
+struct CompactSnapshotSerde {
+    width: u16,
+    height: u16,
+    cells: Vec<SerializableCell>,
+    styles: Vec<Style>,
+    cursor_x: u16,
+    cursor_y: u16,
+    cursor_visible: bool,
+    alternate_screen: bool,
+    scrollback_offset: usize,
+    mouse_reporting: bool,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+struct LegacySnapshotSerde {
     width: u16,
     height: u16,
     cells: Vec<Cell>,
+    cursor_x: u16,
+    cursor_y: u16,
+    cursor_visible: bool,
+    alternate_screen: bool,
+    scrollback_offset: usize,
+    mouse_reporting: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize)]
+#[serde(untagged)]
+enum SnapshotSerde {
+    Compact(CompactSnapshotSerde),
+    Legacy(LegacySnapshotSerde),
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ScreenSnapshot {
+    width: u16,
+    height: u16,
+    cells: Vec<CompactCell>,
+    styles: Vec<Style>,
     cursor_x: u16,
     cursor_y: u16,
     cursor_visible: bool,
@@ -95,7 +233,14 @@ impl ScreenSnapshot {
         Self {
             width,
             height,
-            cells: vec![Cell::blank(); len],
+            cells: vec![
+                CompactCell {
+                    symbol: Symbol::from(' '),
+                    style_id: 0,
+                };
+                len
+            ],
+            styles: vec![Style::default()],
             cursor_x: 0,
             cursor_y: 0,
             cursor_visible: false,
@@ -114,7 +259,7 @@ impl ScreenSnapshot {
                     x as u16,
                     y as u16,
                     Cell {
-                        symbol: ch.to_string(),
+                        symbol: Symbol::from(ch),
                         style: Style::default(),
                     },
                 );
@@ -144,7 +289,7 @@ impl ScreenSnapshot {
         for y in 0..max_height {
             for x in 0..max_width {
                 if let Some(cell) = self.cell(x, y) {
-                    resized.set_cell(x, y, cell.clone());
+                    resized.set_cell(x, y, cell);
                 }
             }
         }
@@ -160,7 +305,7 @@ impl ScreenSnapshot {
                 let src_x = x.saturating_add(dst_x);
                 let src_y = y.saturating_add(dst_y);
                 if let Some(cell) = self.cell(src_x, src_y) {
-                    cropped.set_cell(dst_x, dst_y, cell.clone());
+                    cropped.set_cell(dst_x, dst_y, cell);
                 }
             }
         }
@@ -168,13 +313,16 @@ impl ScreenSnapshot {
         cropped
     }
 
-    pub fn cell(&self, x: u16, y: u16) -> Option<&Cell> {
-        self.index(x, y).map(|idx| &self.cells[idx])
+    pub fn cell(&self, x: u16, y: u16) -> Option<Cell> {
+        self.index(x, y).map(|idx| self.decode_cell(idx))
     }
 
     pub fn set_cell(&mut self, x: u16, y: u16, cell: Cell) {
         if let Some(idx) = self.index(x, y) {
-            self.cells[idx] = cell;
+            self.cells[idx] = CompactCell {
+                symbol: cell.symbol,
+                style_id: self.intern_style(cell.style),
+            };
         }
     }
 
@@ -222,11 +370,11 @@ impl ScreenSnapshot {
     pub fn plain_line(&self, y: u16) -> String {
         let mut line = String::with_capacity(usize::from(self.width));
         for x in 0..self.width {
-            let cell = self.cell(x, y).cloned().unwrap_or_else(Cell::blank);
+            let cell = self.cell(x, y).unwrap_or_else(Cell::blank);
             if cell.symbol.is_empty() {
                 line.push(' ');
             } else {
-                line.push_str(&cell.symbol);
+                line.push_str(cell.symbol.as_str());
             }
         }
         line
@@ -265,7 +413,10 @@ impl ScreenSnapshot {
     pub(crate) fn apply_changes(&mut self, changes: &[(usize, Cell)]) {
         for (idx, cell) in changes {
             if *idx < self.cells.len() {
-                self.cells[*idx] = cell.clone();
+                self.cells[*idx] = CompactCell {
+                    symbol: cell.symbol.clone(),
+                    style_id: self.intern_style(cell.style),
+                };
             }
         }
     }
@@ -275,7 +426,11 @@ impl ScreenSnapshot {
             return self
                 .cells
                 .iter()
-                .filter(|cell| **cell != Cell::blank())
+                .map(|cell| Cell {
+                    symbol: cell.symbol.clone(),
+                    style: self.styles[cell.style_id as usize],
+                })
+                .filter(|cell| *cell != Cell::blank())
                 .count();
         }
 
@@ -291,15 +446,115 @@ impl ScreenSnapshot {
             for x in 0..width {
                 let before = previous
                     .and_then(|snapshot| snapshot.cell(x, y))
-                    .cloned()
                     .unwrap_or_else(Cell::blank);
-                let after = self.cell(x, y).cloned().unwrap_or_else(Cell::blank);
+                let after = self.cell(x, y).unwrap_or_else(Cell::blank);
                 if before != after {
                     changed += 1;
                 }
             }
         }
         changed
+    }
+
+    fn decode_cell(&self, idx: usize) -> Cell {
+        let cell = &self.cells[idx];
+        Cell {
+            symbol: cell.symbol.clone(),
+            style: self.styles[cell.style_id as usize],
+        }
+    }
+
+    fn intern_style(&mut self, style: Style) -> u32 {
+        if let Some((index, _)) = self
+            .styles
+            .iter()
+            .enumerate()
+            .find(|(_, item)| **item == style)
+        {
+            return index as u32;
+        }
+        self.styles.push(style);
+        (self.styles.len() - 1) as u32
+    }
+}
+
+impl Serialize for ScreenSnapshot {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        CompactSnapshotSerde {
+            width: self.width,
+            height: self.height,
+            cells: self
+                .cells
+                .iter()
+                .map(|cell| SerializableCell {
+                    symbol: cell.symbol.clone(),
+                    style_id: cell.style_id,
+                })
+                .collect(),
+            styles: self.styles.clone(),
+            cursor_x: self.cursor_x,
+            cursor_y: self.cursor_y,
+            cursor_visible: self.cursor_visible,
+            alternate_screen: self.alternate_screen,
+            scrollback_offset: self.scrollback_offset,
+            mouse_reporting: self.mouse_reporting,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ScreenSnapshot {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match SnapshotSerde::deserialize(deserializer)? {
+            SnapshotSerde::Compact(value) => Ok(Self {
+                width: value.width,
+                height: value.height,
+                cells: value
+                    .cells
+                    .into_iter()
+                    .map(|cell| CompactCell {
+                        symbol: cell.symbol,
+                        style_id: cell.style_id,
+                    })
+                    .collect(),
+                styles: if value.styles.is_empty() {
+                    vec![Style::default()]
+                } else {
+                    value.styles
+                },
+                cursor_x: value.cursor_x,
+                cursor_y: value.cursor_y,
+                cursor_visible: value.cursor_visible,
+                alternate_screen: value.alternate_screen,
+                scrollback_offset: value.scrollback_offset,
+                mouse_reporting: value.mouse_reporting,
+            }),
+            SnapshotSerde::Legacy(value) => {
+                let mut snapshot = Self::new(value.width, value.height);
+                snapshot.cursor_x = value.cursor_x;
+                snapshot.cursor_y = value.cursor_y;
+                snapshot.cursor_visible = value.cursor_visible;
+                snapshot.alternate_screen = value.alternate_screen;
+                snapshot.scrollback_offset = value.scrollback_offset;
+                snapshot.mouse_reporting = value.mouse_reporting;
+                for (idx, cell) in value.cells.into_iter().enumerate() {
+                    if idx >= snapshot.cells.len() {
+                        break;
+                    }
+                    snapshot.cells[idx] = CompactCell {
+                        symbol: cell.symbol,
+                        style_id: snapshot.intern_style(cell.style),
+                    };
+                }
+                Ok(snapshot)
+            }
+        }
     }
 }
 
@@ -314,7 +569,7 @@ impl fmt::Display for ScreenSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cell, ScreenSnapshot, Style};
+    use super::{Cell, ScreenSnapshot, Style, Symbol};
 
     #[test]
     fn trims_trailing_spaces_when_rendering_lines() {
@@ -323,7 +578,7 @@ mod tests {
             0,
             0,
             Cell {
-                symbol: "a".to_string(),
+                symbol: Symbol::from('a'),
                 style: Style::default(),
             },
         );
@@ -331,7 +586,7 @@ mod tests {
             1,
             0,
             Cell {
-                symbol: "b".to_string(),
+                symbol: Symbol::from('b'),
                 style: Style::default(),
             },
         );

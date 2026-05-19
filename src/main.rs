@@ -20,19 +20,38 @@ use twatch::aftercommand::{AfterCommandConfig, AfterCommandEvent, AfterCommandRu
 use twatch::app::App;
 use twatch::batch;
 use twatch::cli::Cli;
-use twatch::runner::{DemoRunner, FrameSource, PtyRunner, ReplayRunner, SourceEvent};
+use twatch::logging::{
+    LogRecord, active_spill_path, append_delta_record, compact_active_log,
+    pack_log_as_compact_archive,
+};
+use twatch::runner::{DemoRunner, FrameSource, PipeRunner, PtyRunner, ReplayRunner, SourceEvent};
 use twatch::screen::ScreenSnapshot;
 
 const DEMO_BATCH_INTERVAL: Duration = Duration::from_millis(500);
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if cli.pack_logfile.is_some() || cli.pack_output.is_some() {
+        return run_pack_log(cli);
+    }
+    if cli.record_stdin {
+        return run_record_stdin(cli);
+    }
     if cli.batch {
         return run_batch(cli);
     }
 
     install_panic_hook();
     run_interactive(cli)
+}
+
+fn run_pack_log(cli: Cli) -> Result<()> {
+    let Some(input_path) = cli.pack_logfile.as_deref() else {
+        anyhow::bail!("--pack-logfile requires an input path");
+    };
+    let Some(output_path) = cli.pack_output.as_deref() else {
+        anyhow::bail!("--pack-output requires an output path");
+    };
+    pack_log_as_compact_archive(input_path, output_path)
 }
 
 fn run_interactive(cli: Cli) -> Result<()> {
@@ -99,6 +118,80 @@ fn run_batch(cli: Cli) -> Result<()> {
         previous_full_snapshot = Some(frame.snapshot.clone());
         previous = Some(snapshot);
         emitted += 1;
+    }
+
+    source.terminate().ok();
+    Ok(())
+}
+
+fn run_record_stdin(cli: Cli) -> Result<()> {
+    if cli.batch {
+        anyhow::bail!("--record-stdin cannot be combined with --batch");
+    }
+    if cli.replay.is_some() {
+        anyhow::bail!("--record-stdin cannot be combined with --replay");
+    }
+    if !cli.command.is_empty() {
+        anyhow::bail!("--record-stdin does not accept a child command");
+    }
+    let Some(path) = &cli.logfile else {
+        anyhow::bail!("--record-stdin requires --logfile");
+    };
+
+    let (width, height) = stdin_record_size(&cli);
+    let mut source = PipeRunner::from_stdin(width, height);
+    let update_rx = source.take_update_receiver();
+    let mut previous_snapshot: Option<ScreenSnapshot> = None;
+    let mut next_frame_seq = 1u64;
+    let spill_every = cli.record_stdin_spill_every;
+    let spill_retain = cli.record_stdin_spill_retain.max(1);
+    let checkpoint_interval = cli.checkpoint_interval.max(1) as u64;
+
+    loop {
+        match wait_for_batch_source_update(update_rx.as_ref(), &source) {
+            BatchLoopStep::Capture => {}
+            BatchLoopStep::Break => break,
+        }
+
+        let frame = source.capture(width, height)?;
+        if !frame.changed && previous_snapshot.is_some() {
+            continue;
+        }
+
+        let changed_cell_count = frame
+            .snapshot
+            .changed_cell_count_since(previous_snapshot.as_ref());
+
+        append_delta_record(
+            path,
+            &LogRecord {
+                label: frame.label,
+                changed: frame.changed,
+                timestamp_unix_ms: frame.timestamp_unix_ms,
+                frame_seq: next_frame_seq,
+                width: frame.snapshot.width(),
+                height: frame.snapshot.height(),
+                changed_cell_count,
+                input_event_count_since_prev: 0,
+                resized: false,
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: "stdin".to_string(),
+                snapshot: frame.snapshot.clone(),
+            },
+            previous_snapshot.as_ref(),
+            checkpoint_interval,
+        )?;
+        previous_snapshot = Some(frame.snapshot);
+        if spill_every > 0
+            && active_spill_path(path).is_some()
+            && next_frame_seq % spill_every as u64 == 0
+        {
+            let _ = compact_active_log(path, spill_retain);
+        }
+        next_frame_seq += 1;
     }
 
     source.terminate().ok();
@@ -208,6 +301,14 @@ fn build_batch_aftercommand_runtime(cli: &Cli) -> Result<Option<AfterCommandRunt
     })))
 }
 
+fn stdin_record_size(cli: &Cli) -> (u16, u16) {
+    cli.size
+        .or(cli.batch_size)
+        .map(|size| (size.width, size.height))
+        .or_else(|| crossterm::terminal::size().ok())
+        .unwrap_or((120, 40))
+}
+
 struct TerminalRestoreGuard;
 
 impl Drop for TerminalRestoreGuard {
@@ -283,7 +384,8 @@ fn panic_payload<'a>(info: &'a PanicHookInfo<'a>) -> Cow<'a, str> {
 
 #[cfg(test)]
 mod tests {
-    use super::panic_report_path;
+    use super::{panic_report_path, stdin_record_size};
+    use twatch::cli::{Cli, DiffModeArg, ScreenshotFormatArg, SizeSpec, default_shell};
 
     #[test]
     fn panic_report_path_uses_temp_dir() {
@@ -293,5 +395,51 @@ mod tests {
             path.file_name()
                 .is_some_and(|name| name.to_string_lossy().starts_with("twatch-panic-"))
         );
+    }
+
+    #[test]
+    fn stdin_record_size_prefers_explicit_size() {
+        let cli = Cli {
+            batch: false,
+            batch_count: None,
+            batch_size: None,
+            batch_crop: None,
+            batch_diff_only: false,
+            batch_no_color: false,
+            aftercommand: None,
+            keymap: Vec::new(),
+            bind: Vec::new(),
+            aftercommand_regex: None,
+            aftercommand_change_cells: None,
+            aftercommand_every: None,
+            aftercommand_debounce_ms: None,
+            aftercommand_timeout_ms: 3000,
+            compress: false,
+            logfile: None,
+            replay: None,
+            pack_logfile: None,
+            pack_output: None,
+            record_stdin: true,
+            record_stdin_spill_every: 64,
+            record_stdin_spill_retain: 32,
+            size: Some(SizeSpec {
+                width: 90,
+                height: 30,
+            }),
+            screenshot_dir: "/tmp".to_string(),
+            screenshot_format: ScreenshotFormatArg::Text,
+            snapshot_on: None,
+            snapshot_on_regex: None,
+            snapshot_on_change_cells: None,
+            snapshot_once: false,
+            shell: default_shell(),
+            differences: DiffModeArg::None,
+            limit: 500,
+            checkpoint_interval: 12,
+            debug: false,
+            command: Vec::new(),
+        };
+
+        assert_eq!(stdin_record_size(&cli), (90, 30));
     }
 }

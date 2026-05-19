@@ -3,10 +3,11 @@
 // that can be found in the LICENSE file.
 
 use anyhow::Result;
+use std::path::Path;
 
 use super::{App, FocusPane};
 use crate::history::{HistoryMetadata, HistoryStore};
-use crate::logging::{LogRecord, append_record, load_records};
+use crate::logging::{LogRecord, LogRecordStream, append_delta_record, load_records};
 
 impl App {
     pub(super) fn delete_selected_history(&mut self) -> Result<()> {
@@ -68,6 +69,9 @@ impl App {
     }
 
     pub(super) fn trim_history(&mut self) -> Result<()> {
+        if self.limit == 0 {
+            return Ok(());
+        }
         let total = self.history.len();
         if total <= self.limit {
             return Ok(());
@@ -107,7 +111,47 @@ impl App {
             return Ok(());
         };
 
-        for record in load_records(path)? {
+        self.apply_loaded_records(load_records(path)?)?;
+
+        Ok(())
+    }
+
+    pub(super) fn load_history_from_replay_log_prefetch(&mut self) -> Result<()> {
+        let Some(path) = &self.logfile else {
+            return Ok(());
+        };
+        if !Path::new(path).exists() {
+            return Ok(());
+        }
+
+        let mut stream = LogRecordStream::open(path)?;
+        let mut loaded = Vec::new();
+
+        while loaded.len() < super::state::REPLAY_INITIAL_LOAD_FRAMES {
+            let Some(record) = stream.next_record()? else {
+                break;
+            };
+            loaded.push(record);
+        }
+
+        self.apply_loaded_records(loaded)?;
+
+        if stream.has_more()? {
+            self.replay_loader = Some(stream);
+            self.replay_loading = true;
+            self.ui.status_message = Some(format!(
+                "replay loading: {} frames ready, more loading in background",
+                self.loaded_frame_count()
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn apply_loaded_records(&mut self, records: Vec<LogRecord>) -> Result<()> {
+        let was_follow_latest = self.follow_latest;
+
+        for record in records {
             let (snapshot, metadata, changed) = record.into_parts();
             self.archive_current_snapshot()?;
             let metadata = self.complete_metadata(
@@ -120,17 +164,23 @@ impl App {
             self.set_current_snapshot(snapshot, metadata);
         }
 
-        if self.metadata.len() > self.limit {
+        if self.limit > 0 && self.metadata.len() > self.limit {
             self.trim_history()?;
         }
 
         if self.current_snapshot.is_some() {
-            self.selected_index = self.history.len().saturating_sub(1);
-            self.follow_latest = true;
+            if was_follow_latest {
+                self.selected_index = self.history.len().saturating_sub(1);
+                self.follow_latest = true;
+            }
             self.rebuild_filter()?;
         }
 
         Ok(())
+    }
+
+    pub(super) fn loaded_frame_count(&self) -> usize {
+        self.metadata.len() + usize::from(self.current_snapshot.is_some())
     }
 
     pub(super) fn append_log_record(&self) -> Result<()> {
@@ -147,7 +197,13 @@ impl App {
             return Ok(());
         };
 
-        append_record(
+        let previous_snapshot = if self.history.is_empty() {
+            None
+        } else {
+            self.history.snapshot(self.history.len() - 1)?
+        };
+
+        append_delta_record(
             path,
             &LogRecord {
                 label: metadata.label.clone(),
@@ -166,6 +222,8 @@ impl App {
                 resize_source: metadata.resize_source.clone(),
                 snapshot: snapshot.clone(),
             },
+            previous_snapshot.as_ref(),
+            self.checkpoint_interval as u64,
         )
     }
 }

@@ -268,8 +268,8 @@ impl FrameDelta {
         for y in 0..max_height {
             for x in 0..max_width {
                 let idx = usize::from(y) * usize::from(after_width.max(1)) + usize::from(x);
-                let before_cell = before.cell(x, y).cloned().unwrap_or_default();
-                let after_cell = after.cell(x, y).cloned().unwrap_or_default();
+                let before_cell = before.cell(x, y).unwrap_or_default();
+                let after_cell = after.cell(x, y).unwrap_or_default();
 
                 if before_cell != after_cell && x < after_width && y < after_height {
                     changes.push((idx, after_cell));
@@ -297,10 +297,8 @@ fn store_checkpoint(
     store_payload(value, compress)
 }
 
-fn store_delta(value: FrameDelta, _compress: bool) -> Result<StoredPayload<FrameDelta>> {
-    // Deltas are already sparse, so compressing each one tends to waste CPU
-    // more than it saves memory. Keep them raw and only compress checkpoints.
-    store_payload(value, false)
+fn store_delta(value: FrameDelta, compress: bool) -> Result<StoredPayload<FrameDelta>> {
+    store_payload(value, compress)
 }
 
 fn store_payload<T>(value: T, compress: bool) -> Result<StoredPayload<T>>
@@ -406,7 +404,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(history.find_by_query("jobs").unwrap(), vec![0, 1]);
-        assert_eq!(history.stats().compressed_entries, 2);
+        assert_eq!(history.stats().compressed_entries, 3);
     }
 
     #[test]

@@ -19,7 +19,7 @@ use crate::process_control;
 use crate::runner::capture_hook::CaptureHook;
 use crate::runner::encode::{key_to_bytes, mouse_to_bytes};
 use crate::runner::{CaptureFrame, FrameSource, SourceEvent, time_label, unix_timestamp_millis};
-use crate::screen::{Cell, ScreenSnapshot, Style, TermColor};
+use crate::screen::{Cell, ScreenSnapshot, Style, Symbol, TermColor};
 
 const SCROLLBACK_LINES: usize = 10_000;
 
@@ -179,7 +179,7 @@ impl PtyRunner {
                     col,
                     row,
                     Cell {
-                        symbol: symbol.to_string(),
+                        symbol: Symbol::from(symbol),
                         style: Style {
                             fg: map_color(cell.fgcolor()),
                             bg: map_color(cell.bgcolor()),
