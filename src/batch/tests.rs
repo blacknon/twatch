@@ -99,6 +99,7 @@ fn test_cli() -> Cli {
         limit: 500,
         checkpoint_interval: 12,
         debug: false,
+        hide_header: false,
         command: vec!["mock".to_string()],
     }
 }

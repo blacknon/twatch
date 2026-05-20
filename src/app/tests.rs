@@ -2,6 +2,7 @@
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 
+use super::history_ops::build_replay_replace_state;
 use super::{App, FilterMode, FocusPane};
 use crate::cli::{Cli, DiffModeArg, ScreenshotFormatArg};
 use crate::logging::{LogRecord, append_delta_record, append_record, compact_active_log};
@@ -1432,16 +1433,16 @@ fn replay_mode_prefetches_initial_frames_and_defers_rest() {
     )
     .unwrap();
 
-    assert_eq!(
-        app.metadata.len() + usize::from(app.current_snapshot.is_some()),
-        super::state::REPLAY_INITIAL_LOAD_FRAMES
-    );
+    assert_eq!(app.metadata.len(), super::state::REPLAY_INITIAL_LOAD_FRAMES);
+    assert!(app.current_snapshot.is_some());
     assert!(app.replay_loader.is_none());
     assert!(app.replay_loading);
     assert_eq!(app.current_label(), Some("frame-299"));
     assert_eq!(
         app.ui.status_message.as_deref(),
-        Some("replay loading recent tail: 64 frames ready, older history loading in background")
+        Some(
+            "replay loading recent tail: 16 history frames ready, older history loading in background",
+        )
     );
 
     let _ = fs::remove_file(path);
@@ -1458,6 +1459,10 @@ fn replay_mode_prefetches_recent_tail_when_spill_exists() {
 
     let mut previous = None;
     for index in 0..80u64 {
+        let line = (0..512usize)
+            .map(|offset| format!("{:08x}", index.saturating_mul(512) + offset as u64))
+            .collect::<Vec<_>>()
+            .join("");
         let record = LogRecord {
             label: format!("frame-{index}"),
             changed: true,
@@ -1473,7 +1478,7 @@ fn replay_mode_prefetches_recent_tail_when_spill_exists() {
             resize_to_width: 0,
             resize_to_height: 0,
             resize_source: String::new(),
-            snapshot: ScreenSnapshot::from_text_lines(20, 5, &[&format!("line-{index}")]),
+            snapshot: ScreenSnapshot::from_text_lines(5000, 5, &[&line]),
         };
         append_delta_record(
             cli.replay.as_deref().unwrap(),
@@ -1493,13 +1498,142 @@ fn replay_mode_prefetches_recent_tail_when_spill_exists() {
     .unwrap();
 
     assert_eq!(app.current_label(), Some("frame-79"));
-    assert_eq!(app.loaded_frame_count(), 8);
+    assert_eq!(app.metadata.len(), 7);
+    assert!(app.current_snapshot.is_some());
     assert!(app.replay_loader.is_none());
     assert!(app.replay_loading);
     assert_eq!(
         app.ui.status_message.as_deref(),
-        Some("replay loading recent tail: 8 frames ready, older history loading in background")
+        Some(
+            "replay loading recent tail: 7 history frames ready, older history loading in background",
+        )
     );
+
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_file(format!("{}.spill.gz", path.to_string_lossy()));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn replay_mode_loads_small_spill_history_immediately() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-replay-small-spill");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    let mut previous = None;
+    for index in 0..40u64 {
+        let line = (0..512usize)
+            .map(|offset| format!("{:08x}", index.saturating_mul(512) + offset as u64))
+            .collect::<Vec<_>>()
+            .join("");
+        let record = LogRecord {
+            label: format!("frame-{index}"),
+            changed: true,
+            timestamp_unix_ms: index + 1,
+            frame_seq: index + 1,
+            width: 20,
+            height: 5,
+            changed_cell_count: 1,
+            input_event_count_since_prev: 0,
+            resized: false,
+            resize_from_width: 0,
+            resize_from_height: 0,
+            resize_to_width: 0,
+            resize_to_height: 0,
+            resize_source: String::new(),
+            snapshot: ScreenSnapshot::from_text_lines(5000, 5, &[&line]),
+        };
+        append_delta_record(
+            cli.replay.as_deref().unwrap(),
+            &record,
+            previous.as_ref(),
+            120,
+        )
+        .unwrap();
+        previous = Some(record.snapshot);
+    }
+    compact_active_log(cli.replay.as_deref().unwrap(), 8).unwrap();
+
+    let app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+
+    assert_eq!(app.current_label(), Some("frame-39"));
+    assert_eq!(app.loaded_frame_count(), 40);
+    assert!(!app.replay_loading);
+    assert_eq!(
+        app.ui.status_message.as_deref(),
+        Some("replay loaded: 40 frames")
+    );
+
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_file(format!("{}.spill.gz", path.to_string_lossy()));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn replay_replace_state_restores_full_history_after_prefetch() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-replay-replace-state");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    let mut previous = None;
+    for index in 0..40u64 {
+        let line = (0..512usize)
+            .map(|offset| format!("{:08x}", index.saturating_mul(512) + offset as u64))
+            .collect::<Vec<_>>()
+            .join("");
+        let record = LogRecord {
+            label: format!("frame-{index}"),
+            changed: true,
+            timestamp_unix_ms: index + 1,
+            frame_seq: index + 1,
+            width: 20,
+            height: 5,
+            changed_cell_count: 1,
+            input_event_count_since_prev: 0,
+            resized: false,
+            resize_from_width: 0,
+            resize_from_height: 0,
+            resize_to_width: 0,
+            resize_to_height: 0,
+            resize_source: String::new(),
+            snapshot: ScreenSnapshot::from_text_lines(5000, 5, &[&line]),
+        };
+        append_delta_record(
+            cli.replay.as_deref().unwrap(),
+            &record,
+            previous.as_ref(),
+            120,
+        )
+        .unwrap();
+        previous = Some(record.snapshot);
+    }
+    compact_active_log(cli.replay.as_deref().unwrap(), 8).unwrap();
+
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+    assert!(app.loaded_frame_count() <= 40);
+
+    let state = build_replay_replace_state(
+        cli.replay.as_deref().unwrap(),
+        app.checkpoint_interval,
+        app.compress,
+    )
+    .unwrap();
+    app.replace_loaded_replay_state(state).unwrap();
+
+    assert_eq!(app.loaded_frame_count(), 40);
+    assert_eq!(app.current_label(), Some("frame-39"));
 
     let _ = fs::remove_file(&path);
     let _ = fs::remove_file(format!("{}.spill.gz", path.to_string_lossy()));
@@ -1557,6 +1691,27 @@ fn cycle_screenshot_format_toggles_and_updates_status() {
 
     app.cycle_screenshot_format();
     assert_eq!(app.screenshot_format.label(), "text");
+}
+
+#[test]
+fn shift_h_toggles_header_visibility() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![frame("a", &["one"])])),
+    )
+    .unwrap();
+
+    assert!(!app.hide_header);
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('H'), KeyModifiers::SHIFT))
+        .unwrap();
+    assert!(app.hide_header);
+    assert_eq!(app.ui.status_message.as_deref(), Some("header hidden"));
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('H'), KeyModifiers::SHIFT))
+        .unwrap();
+    assert!(!app.hide_header);
+    assert_eq!(app.ui.status_message.as_deref(), Some("header shown"));
 }
 
 #[test]
@@ -1713,6 +1868,7 @@ fn test_cli() -> Cli {
         limit: 500,
         checkpoint_interval: 12,
         debug: false,
+        hide_header: false,
         command: vec!["mock".to_string()],
     }
 }

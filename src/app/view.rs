@@ -18,6 +18,19 @@ impl App {
         }
     }
 
+    pub fn display_history_len(&self) -> usize {
+        self.visible_history_len() + usize::from(self.current_snapshot.is_some())
+    }
+
+    pub fn display_filtered_history_len(&self) -> usize {
+        let current_matches = if self.ui.filter_query.is_empty() {
+            self.current_snapshot.is_some()
+        } else {
+            self.current_snapshot_matches_filter()
+        };
+        self.filtered.len() + usize::from(current_matches)
+    }
+
     pub(super) fn visible_history_start(&self) -> usize {
         if self.limit == 0 {
             0
@@ -248,9 +261,9 @@ impl App {
             return Ok(());
         }
         let (width, height) = crossterm::terminal::size().unwrap_or((120, 40));
-        let Some(snapshot) = self
-            .source
-            .view_snapshot(width, height.saturating_sub(2), offset)?
+        let Some(snapshot) =
+            self.source
+                .view_snapshot(width, self.content_height(height), offset)?
         else {
             self.clear_live_scrollback_view();
             return Ok(());

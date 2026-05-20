@@ -727,10 +727,42 @@ pub fn load_records_from_single_path(path: &str) -> Result<Vec<LogRecord>> {
     Ok(records)
 }
 
+pub fn load_recent_records_from_single_path(
+    path: &str,
+    max_records: usize,
+) -> Result<Vec<LogRecord>> {
+    if max_records == 0 || !Path::new(path).exists() {
+        return Ok(Vec::new());
+    }
+    if is_gzip_log_path(path) || is_compact_archive_path(path) {
+        let mut records = load_records_from_single_path(path)?;
+        if records.len() > max_records {
+            let split_at = records.len() - max_records;
+            records.drain(0..split_at);
+        }
+        return Ok(records);
+    }
+
+    let stored = load_recent_stored_records_from_plain_path(path, max_records)?;
+    let mut previous_snapshot = None;
+    let mut records = Vec::with_capacity(stored.len());
+    for record in stored {
+        let record = record.into_log_record(previous_snapshot.as_ref())?;
+        previous_snapshot = Some(record.snapshot.clone());
+        records.push(record);
+    }
+    Ok(records)
+}
+
 pub fn active_spill_exists(path: &str) -> bool {
     active_spill_path(path)
         .as_ref()
         .is_some_and(|spill_path| Path::new(spill_path).exists())
+}
+
+pub fn active_spill_size_bytes(path: &str) -> Option<u64> {
+    let spill_path = active_spill_path(path)?;
+    std::fs::metadata(spill_path).ok().map(|meta| meta.len())
 }
 
 pub fn load_recent_records_from_plain_path(
@@ -1086,8 +1118,8 @@ where
 mod tests {
     use super::{
         LogFrameDelta, LogRecord, LogRecordStream, active_spill_path, append_delta_record,
-        append_record, compact_active_log, load_recent_records_from_plain_path, load_records,
-        pack_log_as_compact_archive,
+        append_record, compact_active_log, load_recent_records_from_plain_path,
+        load_recent_records_from_single_path, load_records, pack_log_as_compact_archive,
     };
     use crate::screen::ScreenSnapshot;
 
@@ -1519,6 +1551,52 @@ mod tests {
             vec!["f7", "f8", "f9"]
         );
 
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn loads_recent_records_from_single_path_tail() {
+        let path =
+            std::env::temp_dir().join(format!("twatch-tail-single-{}.jsonl", std::process::id()));
+        let spill = active_spill_path(path.to_str().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&spill);
+
+        let mut previous = None;
+        for index in 0..10u64 {
+            let record = LogRecord {
+                label: format!("f{index}"),
+                changed: true,
+                timestamp_unix_ms: index + 1,
+                frame_seq: index + 1,
+                width: 8,
+                height: 1,
+                changed_cell_count: 1,
+                input_event_count_since_prev: 0,
+                resized: false,
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: "stdin".to_string(),
+                snapshot: ScreenSnapshot::from_text_lines(8, 1, &[&format!("line-{index}")]),
+            };
+            append_delta_record(path.to_str().unwrap(), &record, previous.as_ref(), 120).unwrap();
+            previous = Some(record.snapshot);
+        }
+
+        compact_active_log(path.to_str().unwrap(), 3).unwrap();
+
+        let records = load_recent_records_from_single_path(path.to_str().unwrap(), 2).unwrap();
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["f7", "f8", "f9"]
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&spill);
     }
 }

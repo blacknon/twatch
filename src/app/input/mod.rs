@@ -105,6 +105,15 @@ impl App {
         };
     }
 
+    fn toggle_header_visibility(&mut self) {
+        self.hide_header = !self.hide_header;
+        self.ui.status_message = Some(if self.hide_header {
+            "header hidden".to_string()
+        } else {
+            "header shown".to_string()
+        });
+    }
+
     fn should_ignore_mouse_ghost_key(&self, key: KeyEvent) -> bool {
         let Some(last_mouse_scroll_input) = self.last_mouse_scroll_input else {
             return false;
@@ -319,6 +328,7 @@ impl App {
                 self.ui.show_inspector = !self.ui.show_inspector;
                 self.clamp_inspector_to_snapshot();
             }
+            KeyAction::ToggleHeader => self.toggle_header_visibility(),
             KeyAction::SaveSnapshot => self.save_snapshot()?,
             KeyAction::CycleSnapshotFormat => self.cycle_screenshot_format(),
             KeyAction::ScrollLeft => {

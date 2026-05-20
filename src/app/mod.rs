@@ -38,16 +38,23 @@ enum AppEvent {
     SourceUpdated,
     SourceClosed(Option<String>),
     ReplayRecordsLoaded(Vec<LogRecord>),
-    ReplayRecordsReplaced(Vec<LogRecord>),
+    ReplayStateReplaced(ReplayReplaceState),
     ReplayLoadFinished,
     ReplayLoadFailed(String),
 }
 
 enum ReplayLoadMessage {
     Records(Vec<LogRecord>),
-    Replace(Vec<LogRecord>),
+    ReplaceState(Box<ReplayReplaceState>),
     Finished,
     Failed(String),
+}
+
+struct ReplayReplaceState {
+    history: HistoryStore,
+    metadata: Vec<AppHistoryMetadata>,
+    current_snapshot: Option<ScreenSnapshot>,
+    current_metadata: Option<AppHistoryMetadata>,
 }
 
 enum LoopControl {
@@ -300,6 +307,7 @@ impl InputTraceEvent {
 
 pub struct App {
     pub debug: bool,
+    pub hide_header: bool,
     pub paused: bool,
     pub child_paused: bool,
     pub child_pause_supported: bool,

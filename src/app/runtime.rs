@@ -38,8 +38,8 @@ impl App {
                         ReplayLoadMessage::Records(records) => {
                             AppEvent::ReplayRecordsLoaded(records)
                         }
-                        ReplayLoadMessage::Replace(records) => {
-                            AppEvent::ReplayRecordsReplaced(records)
+                        ReplayLoadMessage::ReplaceState(state) => {
+                            AppEvent::ReplayStateReplaced(*state)
                         }
                         ReplayLoadMessage::Finished => AppEvent::ReplayLoadFinished,
                         ReplayLoadMessage::Failed(err) => AppEvent::ReplayLoadFailed(err),
@@ -92,14 +92,15 @@ impl App {
 
     fn capture_terminal_size(&mut self, terminal: &DefaultTerminal) -> Result<()> {
         let size = terminal.size()?;
-        self.capture(size.width, size.height.saturating_sub(2))
+        self.capture(size.width, self.content_height(size.height))
     }
 
     fn resize_and_capture(&mut self, width: u16, height: u16) -> Result<()> {
-        self.note_resize_event(width, height.saturating_sub(2), "terminal");
-        self.source.resize(width, height.saturating_sub(2))?;
+        let content_height = self.content_height(height);
+        self.note_resize_event(width, content_height, "terminal");
+        self.source.resize(width, content_height)?;
         if !self.paused {
-            self.capture(width, height.saturating_sub(2))?;
+            self.capture(width, content_height)?;
         }
         Ok(())
     }
@@ -112,7 +113,7 @@ impl App {
     ) -> Result<()> {
         if self.current_snapshot.is_none() {
             let size = terminal.size()?;
-            if let Err(err) = self.capture(size.width, size.height.saturating_sub(2)) {
+            if let Err(err) = self.capture(size.width, self.content_height(size.height)) {
                 if self.is_source_closed_error(&err) {
                     self.source.terminate().ok();
                     return Ok(());
@@ -165,8 +166,8 @@ impl App {
                         self.apply_loaded_records(records)?;
                         needs_redraw = true;
                     }
-                    Ok(AppEvent::ReplayRecordsReplaced(records)) => {
-                        self.replace_loaded_records(records)?;
+                    Ok(AppEvent::ReplayStateReplaced(state)) => {
+                        self.replace_loaded_replay_state(state)?;
                         needs_redraw = true;
                     }
                     Ok(AppEvent::ReplayLoadFinished) => {
@@ -206,8 +207,8 @@ impl App {
                         self.apply_loaded_records(records)?;
                         needs_redraw = true;
                     }
-                    Ok(AppEvent::ReplayRecordsReplaced(records)) => {
-                        self.replace_loaded_records(records)?;
+                    Ok(AppEvent::ReplayStateReplaced(state)) => {
+                        self.replace_loaded_replay_state(state)?;
                         needs_redraw = true;
                     }
                     Ok(AppEvent::ReplayLoadFinished) => {

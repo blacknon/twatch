@@ -5,11 +5,11 @@
 use anyhow::Result;
 use std::path::Path;
 
-use super::{App, FocusPane};
+use super::{App, AppHistoryMetadata, FocusPane, ReplayReplaceState};
 use crate::history::{HistoryMetadata, HistoryStore};
 use crate::logging::{
-    LogRecord, LogRecordStream, active_spill_exists, append_delta_record,
-    load_recent_records_from_plain_path, load_records, load_records_from_single_path,
+    LogRecord, LogRecordStream, active_spill_exists, active_spill_size_bytes, append_delta_record,
+    load_recent_records_from_plain_path, load_recent_records_from_single_path, load_records,
 };
 
 impl App {
@@ -128,19 +128,26 @@ impl App {
         }
 
         if active_spill_exists(&path) {
-            let mut loaded = load_records_from_single_path(&path)?;
-            let keep = super::state::REPLAY_INITIAL_LOAD_FRAMES;
-            if loaded.len() > keep {
-                let split_at = loaded.len() - keep;
-                loaded.drain(0..split_at);
+            if active_spill_size_bytes(&path)
+                .is_some_and(|bytes| bytes <= super::state::REPLAY_SYNC_SMALL_SPILL_MAX_BYTES)
+            {
+                self.apply_loaded_records(load_records(&path)?)?;
+                self.ui.status_message = Some(format!(
+                    "replay loaded: {} frames",
+                    self.loaded_frame_count()
+                ));
+                return Ok(());
             }
-
+            let loaded = load_recent_records_from_single_path(
+                &path,
+                super::state::replay_prefetch_record_count(),
+            )?;
             self.apply_loaded_records(loaded)?;
             self.replay_reload_path = Some(path);
             self.replay_loading = true;
             self.ui.status_message = Some(format!(
-                "replay loading recent tail: {} frames ready, older history loading in background",
-                self.loaded_frame_count()
+                "replay loading recent tail: {} history frames ready, older history loading in background",
+                self.metadata.len()
             ));
             return Ok(());
         }
@@ -148,15 +155,15 @@ impl App {
         if path.ends_with(".jsonl") {
             let loaded = load_recent_records_from_plain_path(
                 &path,
-                super::state::REPLAY_INITIAL_LOAD_FRAMES,
+                super::state::replay_prefetch_record_count(),
             )?;
             if !loaded.is_empty() {
                 self.apply_loaded_records(loaded)?;
                 self.replay_reload_path = Some(path);
                 self.replay_loading = true;
                 self.ui.status_message = Some(format!(
-                    "replay loading recent tail: {} frames ready, older history loading in background",
-                    self.loaded_frame_count()
+                    "replay loading recent tail: {} history frames ready, older history loading in background",
+                    self.metadata.len()
                 ));
                 return Ok(());
             }
@@ -165,7 +172,7 @@ impl App {
         let mut stream = LogRecordStream::open(&path)?;
         let mut loaded = Vec::new();
 
-        while loaded.len() < super::state::REPLAY_INITIAL_LOAD_FRAMES {
+        while loaded.len() < super::state::replay_prefetch_record_count() {
             let Some(record) = stream.next_record()? else {
                 break;
             };
@@ -178,15 +185,15 @@ impl App {
             self.replay_loader = Some(stream);
             self.replay_loading = true;
             self.ui.status_message = Some(format!(
-                "replay loading: {} frames ready, more loading in background",
-                self.loaded_frame_count()
+                "replay loading: {} history frames ready, more loading in background",
+                self.metadata.len()
             ));
         }
 
         Ok(())
     }
 
-    pub(super) fn replace_loaded_records(&mut self, records: Vec<LogRecord>) -> Result<()> {
+    pub(super) fn replace_loaded_replay_state(&mut self, state: ReplayReplaceState) -> Result<()> {
         let preserve_follow_latest = self.follow_latest;
         let preserve_frame_seq = if self.follow_latest {
             self.current_metadata
@@ -198,16 +205,26 @@ impl App {
                 .map(|metadata| metadata.frame_seq)
         };
 
-        self.history = HistoryStore::new(self.checkpoint_interval, self.compress);
-        self.metadata.clear();
-        self.current_snapshot = None;
-        self.current_metadata = None;
+        self.history = state.history;
+        self.metadata = state.metadata;
+        self.current_snapshot = state.current_snapshot;
+        self.current_metadata = state.current_metadata;
         self.filtered.clear();
         self.selected_index = 0;
         self.follow_latest = preserve_follow_latest;
         self.invalidate_view_cache();
 
-        self.apply_loaded_records(records)?;
+        if self.limit > 0 && self.metadata.len() > self.limit {
+            self.trim_history()?;
+        }
+
+        if self.current_snapshot.is_some() {
+            if preserve_follow_latest {
+                self.selected_index = self.history.len().saturating_sub(1);
+                self.follow_latest = true;
+            }
+            self.rebuild_filter()?;
+        }
 
         if !preserve_follow_latest {
             if let Some(frame_seq) = preserve_frame_seq
@@ -303,4 +320,40 @@ impl App {
             self.checkpoint_interval as u64,
         )
     }
+}
+
+pub(super) fn build_replay_replace_state(
+    path: &str,
+    checkpoint_interval: usize,
+    compress: bool,
+) -> Result<ReplayReplaceState> {
+    let mut loader = LogRecordStream::open(path)?;
+    let mut history = HistoryStore::new(checkpoint_interval, compress);
+    let mut metadata = Vec::new();
+    let mut current_snapshot = None;
+    let mut current_metadata: Option<AppHistoryMetadata> = None;
+
+    while let Some(record) = loader.next_record()? {
+        let (snapshot, record_metadata, changed) = record.into_parts();
+
+        if let (Some(previous_snapshot), Some(previous_metadata)) =
+            (current_snapshot.take(), current_metadata.take())
+        {
+            history.push(previous_snapshot, previous_metadata.to_history_metadata())?;
+            metadata.push(previous_metadata);
+        }
+
+        current_snapshot = Some(snapshot);
+        current_metadata = Some(AppHistoryMetadata::from_history_metadata(HistoryMetadata {
+            changed,
+            ..record_metadata
+        }));
+    }
+
+    Ok(ReplayReplaceState {
+        history,
+        metadata,
+        current_snapshot,
+        current_metadata,
+    })
 }

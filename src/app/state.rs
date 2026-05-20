@@ -6,19 +6,25 @@ use anyhow::Result;
 use std::sync::mpsc;
 
 use super::config::AppConfig;
+use super::history_ops::build_replay_replace_state;
 use super::{App, AppHistoryMetadata, FilterMode, InputMode, ReplayLoadMessage};
 use crate::cli::Cli;
 use crate::history::HistoryStore;
-use crate::logging::load_records;
 use crate::runner::FrameSource;
 
-pub(super) const REPLAY_INITIAL_LOAD_FRAMES: usize = 64;
+pub(super) const REPLAY_INITIAL_LOAD_FRAMES: usize = 16;
+pub(super) const REPLAY_SYNC_SMALL_SPILL_MAX_BYTES: u64 = 128 * 1024;
+
+pub(super) fn replay_prefetch_record_count() -> usize {
+    REPLAY_INITIAL_LOAD_FRAMES.saturating_add(1)
+}
 
 impl App {
     pub fn new(cli: &Cli, source: Box<dyn FrameSource>) -> Result<Self> {
         let config = AppConfig::from_cli(cli, source.supports_child_pause())?;
         let mut app = Self {
             debug: config.debug,
+            hide_header: config.hide_header,
             paused: false,
             child_paused: false,
             child_pause_supported: config.child_pause_supported,
@@ -73,20 +79,35 @@ impl App {
         Ok(app)
     }
 
+    pub(crate) fn header_rows(&self) -> u16 {
+        if self.hide_header { 0 } else { 2 }
+    }
+
+    pub(crate) fn content_height(&self, total_height: u16) -> u16 {
+        total_height.saturating_sub(self.header_rows())
+    }
+
     pub(super) fn start_replay_loader(&mut self) {
         if let Some(path) = self.replay_reload_path.take() {
             let (tx, rx) = mpsc::channel();
             self.replay_loader_rx = Some(rx);
             self.replay_loading = true;
-            std::thread::spawn(move || match load_records(&path) {
-                Ok(records) => {
-                    if tx.send(ReplayLoadMessage::Replace(records)).is_err() {
-                        return;
+            let checkpoint_interval = self.checkpoint_interval;
+            let compress = self.compress;
+            std::thread::spawn(move || {
+                match build_replay_replace_state(&path, checkpoint_interval, compress) {
+                    Ok(state) => {
+                        if tx
+                            .send(ReplayLoadMessage::ReplaceState(Box::new(state)))
+                            .is_err()
+                        {
+                            return;
+                        }
+                        let _ = tx.send(ReplayLoadMessage::Finished);
                     }
-                    let _ = tx.send(ReplayLoadMessage::Finished);
-                }
-                Err(err) => {
-                    let _ = tx.send(ReplayLoadMessage::Failed(err.to_string()));
+                    Err(err) => {
+                        let _ = tx.send(ReplayLoadMessage::Failed(err.to_string()));
+                    }
                 }
             });
             return;

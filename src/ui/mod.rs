@@ -34,20 +34,25 @@ pub(super) const BADGE_GREY: Color = Color::Indexed(238);
 
 pub fn draw(frame: &mut Frame<'_>, app: &App) {
     let area = frame.area();
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(1),
-        ])
-        .split(area);
+    let watch_area = if app.hide_header {
+        area
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1),
+                Constraint::Length(1),
+                Constraint::Min(1),
+            ])
+            .split(area);
 
-    header::draw_header_line_one(frame, app, chunks[0]);
-    header::draw_header_line_two(frame, app, chunks[1]);
+        header::draw_header_line_one(frame, app, chunks[0]);
+        header::draw_header_line_two(frame, app, chunks[1]);
+        chunks[2]
+    };
 
-    watch::draw_watch(frame, app, chunks[2]);
-    history::draw_history_overlay(frame, app, chunks[2]);
+    watch::draw_watch(frame, app, watch_area);
+    history::draw_history_overlay(frame, app, watch_area);
     history::draw_history_details(frame, app, area);
 
     if app.ui.show_help {

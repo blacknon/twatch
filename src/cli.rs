@@ -178,6 +178,9 @@ pub struct Cli {
     #[arg(long, help = "Show debug diagnostics in the interactive UI")]
     pub debug: bool,
 
+    #[arg(long, help = "Hide the two-line interactive header")]
+    pub hide_header: bool,
+
     #[arg()]
     pub command: Vec<String>,
 }
@@ -358,5 +361,12 @@ mod tests {
         );
         assert_eq!(cli.record_stdin_spill_every, 64);
         assert_eq!(cli.record_stdin_spill_retain, 32);
+    }
+
+    #[test]
+    fn parses_hide_header_flag() {
+        let cli = Cli::parse_from(["twatch", "--hide-header", "--replay", "trace.jsonl"]);
+        assert!(cli.hide_header);
+        assert_eq!(cli.replay.as_deref(), Some("trace.jsonl"));
     }
 }

@@ -56,11 +56,12 @@ fn run_pack_log(cli: Cli) -> Result<()> {
 
 fn run_interactive(cli: Cli) -> Result<()> {
     let (width, height) = crossterm::terminal::size().unwrap_or((120, 40));
+    let header_rows = if cli.hide_header { 0 } else { 2 };
     let source = build_source(
         &cli,
         SourceBuildMode::Interactive,
         width,
-        height.saturating_sub(2),
+        height.saturating_sub(header_rows),
     )?;
     let app = App::new(&cli, source)?;
 
@@ -437,6 +438,7 @@ mod tests {
             limit: 500,
             checkpoint_interval: 12,
             debug: false,
+            hide_header: false,
             command: Vec::new(),
         };
 

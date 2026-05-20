@@ -24,7 +24,7 @@ impl App {
                     MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
                 ) && self.selected_snapshot_has_mouse_reporting()
                 {
-                    if self.source.send_mouse(mouse, 2)? {
+                    if self.source.send_mouse(mouse, self.header_rows())? {
                         self.record_child_mouse_event(mouse);
                     }
                     return Ok(false);
@@ -41,14 +41,14 @@ impl App {
                     };
                     return self.scroll_main_screen_view(delta);
                 }
-                if self.source.send_mouse(mouse, 2)? {
+                if self.source.send_mouse(mouse, self.header_rows())? {
                     self.record_child_mouse_event(mouse);
                 }
             }
             return Ok(false);
         }
 
-        if mouse.row < 2 {
+        if mouse.row < self.header_rows() {
             return Ok(false);
         }
 
@@ -69,7 +69,7 @@ impl App {
                     return Ok(true);
                 } else if self.follow_latest && self.selected_snapshot_has_mouse_reporting() {
                     self.ui.focus = FocusPane::Watch;
-                    if self.source.send_mouse(mouse, 2)? {
+                    if self.source.send_mouse(mouse, self.header_rows())? {
                         self.record_child_mouse_event(mouse);
                     }
                     return Ok(previous_focus != self.ui.focus);
@@ -79,7 +79,7 @@ impl App {
                     return Ok(changed || previous_focus != self.ui.focus);
                 } else if self.follow_latest {
                     self.ui.focus = FocusPane::Watch;
-                    if self.source.send_mouse(mouse, 2)? {
+                    if self.source.send_mouse(mouse, self.header_rows())? {
                         self.record_child_mouse_event(mouse);
                     }
                     return Ok(previous_focus != self.ui.focus);
@@ -97,7 +97,7 @@ impl App {
                     return Ok(true);
                 } else if self.follow_latest && self.selected_snapshot_has_mouse_reporting() {
                     self.ui.focus = FocusPane::Watch;
-                    if self.source.send_mouse(mouse, 2)? {
+                    if self.source.send_mouse(mouse, self.header_rows())? {
                         self.record_child_mouse_event(mouse);
                     }
                     return Ok(previous_focus != self.ui.focus);
@@ -107,7 +107,7 @@ impl App {
                     return Ok(changed || previous_focus != self.ui.focus);
                 } else if self.follow_latest {
                     self.ui.focus = FocusPane::Watch;
-                    if self.source.send_mouse(mouse, 2)? {
+                    if self.source.send_mouse(mouse, self.header_rows())? {
                         self.record_child_mouse_event(mouse);
                     }
                     return Ok(previous_focus != self.ui.focus);
@@ -130,7 +130,7 @@ impl App {
                     return Ok(true);
                 } else if self.follow_latest {
                     self.ui.focus = FocusPane::Watch;
-                    if self.source.send_mouse(mouse, 2)? {
+                    if self.source.send_mouse(mouse, self.header_rows())? {
                         self.record_child_mouse_event(mouse);
                     }
                     return Ok(previous_focus != self.ui.focus);
@@ -143,7 +143,7 @@ impl App {
             MouseEventKind::Up(_) | MouseEventKind::Drag(_) => {
                 if !over_history && self.follow_latest {
                     self.ui.focus = FocusPane::Watch;
-                    if self.source.send_mouse(mouse, 2)? {
+                    if self.source.send_mouse(mouse, self.header_rows())? {
                         self.record_child_mouse_event(mouse);
                     }
                     return Ok(previous_focus != self.ui.focus);
@@ -163,11 +163,11 @@ impl App {
 
     fn history_visible_rows(&self) -> usize {
         crossterm::terminal::size()
-            .map(|(_, height)| usize::from(height.saturating_sub(4)))
+            .map(|(_, height)| usize::from(height.saturating_sub(self.header_rows() + 2)))
             .unwrap_or(0)
     }
 
     fn history_content_top(&self) -> u16 {
-        3
+        self.header_rows() + 1
     }
 }
