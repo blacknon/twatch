@@ -38,12 +38,14 @@ enum AppEvent {
     SourceUpdated,
     SourceClosed(Option<String>),
     ReplayRecordsLoaded(Vec<LogRecord>),
+    ReplayRecordsReplaced(Vec<LogRecord>),
     ReplayLoadFinished,
     ReplayLoadFailed(String),
 }
 
 enum ReplayLoadMessage {
     Records(Vec<LogRecord>),
+    Replace(Vec<LogRecord>),
     Finished,
     Failed(String),
 }
@@ -330,6 +332,7 @@ pub struct App {
     child_bindings: Vec<ChildBinding>,
     source: Box<dyn FrameSource>,
     replay_loader: Option<LogRecordStream>,
+    replay_reload_path: Option<String>,
     replay_loader_rx: Option<mpsc::Receiver<ReplayLoadMessage>>,
     replay_loading: bool,
     last_mouse_input: Option<Instant>,

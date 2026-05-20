@@ -4,7 +4,7 @@
 
 use std::collections::VecDeque;
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -712,6 +712,150 @@ fn load_stored_records(path: &str) -> Result<Vec<StoredLogRecord>> {
     Ok(records)
 }
 
+pub fn load_records_from_single_path(path: &str) -> Result<Vec<LogRecord>> {
+    if !Path::new(path).exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut previous_snapshot = None;
+    let mut records = Vec::new();
+    for stored in load_stored_records_from_path(path)? {
+        let record = stored.into_log_record(previous_snapshot.as_ref())?;
+        previous_snapshot = Some(record.snapshot.clone());
+        records.push(record);
+    }
+    Ok(records)
+}
+
+pub fn active_spill_exists(path: &str) -> bool {
+    active_spill_path(path)
+        .as_ref()
+        .is_some_and(|spill_path| Path::new(spill_path).exists())
+}
+
+pub fn load_recent_records_from_plain_path(
+    path: &str,
+    max_records: usize,
+) -> Result<Vec<LogRecord>> {
+    if max_records == 0
+        || !Path::new(path).exists()
+        || is_gzip_log_path(path)
+        || is_compact_archive_path(path)
+    {
+        return Ok(Vec::new());
+    }
+
+    let stored = load_recent_stored_records_from_plain_path(path, max_records)?;
+    let mut previous_snapshot = None;
+    let mut records = Vec::with_capacity(stored.len());
+    for record in stored {
+        let record = record.into_log_record(previous_snapshot.as_ref())?;
+        previous_snapshot = Some(record.snapshot.clone());
+        records.push(record);
+    }
+    Ok(records)
+}
+
+fn load_recent_stored_records_from_plain_path(
+    path: &str,
+    max_records: usize,
+) -> Result<Vec<StoredLogRecord>> {
+    let mut file = File::open(path).with_context(|| format!("failed to open logfile: {path}"))?;
+    let file_len = file
+        .seek(SeekFrom::End(0))
+        .context("failed to seek logfile end")?;
+    if file_len == 0 {
+        return Ok(Vec::new());
+    }
+
+    const INITIAL_WINDOW_BYTES: u64 = 256 * 1024;
+    const MAX_WINDOW_BYTES: u64 = 4 * 1024 * 1024;
+
+    let mut window_bytes = INITIAL_WINDOW_BYTES.min(file_len);
+
+    loop {
+        let start = file_len.saturating_sub(window_bytes);
+        file.seek(SeekFrom::Start(start))
+            .context("failed to seek logfile chunk")?;
+        let mut buffer = vec![0u8; usize::try_from(file_len - start).unwrap_or(0)];
+        file.read_exact(&mut buffer)
+            .context("failed to read logfile chunk")?;
+
+        let text = String::from_utf8(buffer).context("logfile is not valid utf-8")?;
+        let lines = collect_complete_lines_from_window(&text, start > 0);
+        if lines.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        if let Some(trimmed) = trim_recent_lines_with_snapshot_boundary(&lines, max_records)? {
+            return trimmed
+                .into_iter()
+                .map(|line| serde_json::from_str(&line).context("failed to parse jsonl log record"))
+                .collect();
+        }
+
+        if start == 0 || window_bytes >= MAX_WINDOW_BYTES {
+            return lines
+                .into_iter()
+                .map(|line| serde_json::from_str(&line).context("failed to parse jsonl log record"))
+                .collect();
+        }
+
+        window_bytes = (window_bytes.saturating_mul(2))
+            .min(MAX_WINDOW_BYTES)
+            .min(file_len);
+    }
+}
+
+fn starts_with_full_snapshot(lines: &[String]) -> Result<bool> {
+    let Some(first) = lines.first() else {
+        return Ok(false);
+    };
+    let stored: StoredLogRecord =
+        serde_json::from_str(first).context("failed to parse jsonl log record")?;
+    Ok(stored.snapshot.is_some())
+}
+
+fn collect_complete_lines_from_window(text: &str, drop_partial_first_line: bool) -> Vec<String> {
+    let mut lines: Vec<String> = text.lines().map(|line| line.to_string()).collect();
+    if drop_partial_first_line && !text.starts_with('\n') && !lines.is_empty() {
+        lines.remove(0);
+    }
+    lines.retain(|line| !line.trim().is_empty());
+    lines
+}
+
+fn trim_recent_lines_with_snapshot_boundary(
+    lines: &[String],
+    max_records: usize,
+) -> Result<Option<Vec<String>>> {
+    if lines.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+
+    let keep = max_records.max(1);
+    let tail_start = lines.len().saturating_sub(keep);
+    let first_full_in_tail = (tail_start..lines.len()).find(|&idx| {
+        serde_json::from_str::<StoredLogRecord>(&lines[idx])
+            .map(|record| record.snapshot.is_some())
+            .unwrap_or(false)
+    });
+
+    if let Some(start) = first_full_in_tail {
+        return Ok(Some(lines[start..].to_vec()));
+    }
+
+    if tail_start == 0 {
+        return Ok(Some(lines.to_vec()));
+    }
+
+    if starts_with_full_snapshot(&lines[tail_start - 1..])? {
+        return Ok(Some(lines[(tail_start - 1)..].to_vec()));
+    }
+
+    Ok(None)
+}
+
 pub fn pack_log_as_compact_archive(input_path: &str, output_path: &str) -> Result<()> {
     let archive = CompactArchiveFile {
         version: 1,
@@ -735,6 +879,7 @@ pub fn compact_active_log(path: &str, retain_recent_records: usize) -> Result<()
     if current_records.len() <= retain_recent_records {
         return Ok(());
     }
+    let current_full_records = load_records_from_single_path(path)?;
 
     let split_at = current_records.len() - retain_recent_records;
     let Some(spill_path) = active_spill_path(path) else {
@@ -744,7 +889,10 @@ pub fn compact_active_log(path: &str, retain_recent_records: usize) -> Result<()
     for record in &current_records[..split_at] {
         write_stored_record(&spill_path, record)?;
     }
-    write_stored_records(path, &current_records[split_at..])?;
+    let mut tail_records = Vec::with_capacity(current_records.len() - split_at);
+    tail_records.push(StoredLogRecord::from_full(&current_full_records[split_at])?);
+    tail_records.extend(current_records[(split_at + 1)..].iter().cloned());
+    write_stored_records(path, &tail_records)?;
     Ok(())
 }
 
@@ -938,7 +1086,8 @@ where
 mod tests {
     use super::{
         LogFrameDelta, LogRecord, LogRecordStream, active_spill_path, append_delta_record,
-        append_record, compact_active_log, load_records, pack_log_as_compact_archive,
+        append_record, compact_active_log, load_recent_records_from_plain_path, load_records,
+        pack_log_as_compact_archive,
     };
     use crate::screen::ScreenSnapshot;
 
@@ -1330,5 +1479,46 @@ mod tests {
 
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(spill);
+    }
+
+    #[test]
+    fn loads_recent_records_from_plain_jsonl_tail() {
+        let path =
+            std::env::temp_dir().join(format!("twatch-tail-plain-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let mut previous = None;
+        for index in 0..10u64 {
+            let record = LogRecord {
+                label: format!("f{index}"),
+                changed: true,
+                timestamp_unix_ms: index + 1,
+                frame_seq: index + 1,
+                width: 8,
+                height: 1,
+                changed_cell_count: 1,
+                input_event_count_since_prev: 0,
+                resized: false,
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: "stdin".to_string(),
+                snapshot: ScreenSnapshot::from_text_lines(8, 1, &[&format!("line-{index}")]),
+            };
+            append_delta_record(path.to_str().unwrap(), &record, previous.as_ref(), 4).unwrap();
+            previous = Some(record.snapshot);
+        }
+
+        let records = load_recent_records_from_plain_path(path.to_str().unwrap(), 3).unwrap();
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["f7", "f8", "f9"]
+        );
+
+        let _ = std::fs::remove_file(path);
     }
 }

@@ -9,9 +9,10 @@ use super::config::AppConfig;
 use super::{App, AppHistoryMetadata, FilterMode, InputMode, ReplayLoadMessage};
 use crate::cli::Cli;
 use crate::history::HistoryStore;
+use crate::logging::load_records;
 use crate::runner::FrameSource;
 
-pub(super) const REPLAY_INITIAL_LOAD_FRAMES: usize = 256;
+pub(super) const REPLAY_INITIAL_LOAD_FRAMES: usize = 64;
 
 impl App {
     pub fn new(cli: &Cli, source: Box<dyn FrameSource>) -> Result<Self> {
@@ -50,6 +51,7 @@ impl App {
             child_bindings: config.child_bindings,
             source,
             replay_loader: None,
+            replay_reload_path: None,
             replay_loader_rx: None,
             replay_loading: false,
             last_mouse_input: None,
@@ -72,6 +74,24 @@ impl App {
     }
 
     pub(super) fn start_replay_loader(&mut self) {
+        if let Some(path) = self.replay_reload_path.take() {
+            let (tx, rx) = mpsc::channel();
+            self.replay_loader_rx = Some(rx);
+            self.replay_loading = true;
+            std::thread::spawn(move || match load_records(&path) {
+                Ok(records) => {
+                    if tx.send(ReplayLoadMessage::Replace(records)).is_err() {
+                        return;
+                    }
+                    let _ = tx.send(ReplayLoadMessage::Finished);
+                }
+                Err(err) => {
+                    let _ = tx.send(ReplayLoadMessage::Failed(err.to_string()));
+                }
+            });
+            return;
+        }
+
         let Some(mut loader) = self.replay_loader.take() else {
             return;
         };

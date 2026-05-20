@@ -38,6 +38,9 @@ impl App {
                         ReplayLoadMessage::Records(records) => {
                             AppEvent::ReplayRecordsLoaded(records)
                         }
+                        ReplayLoadMessage::Replace(records) => {
+                            AppEvent::ReplayRecordsReplaced(records)
+                        }
                         ReplayLoadMessage::Finished => AppEvent::ReplayLoadFinished,
                         ReplayLoadMessage::Failed(err) => AppEvent::ReplayLoadFailed(err),
                     };
@@ -162,6 +165,10 @@ impl App {
                         self.apply_loaded_records(records)?;
                         needs_redraw = true;
                     }
+                    Ok(AppEvent::ReplayRecordsReplaced(records)) => {
+                        self.replace_loaded_records(records)?;
+                        needs_redraw = true;
+                    }
                     Ok(AppEvent::ReplayLoadFinished) => {
                         self.replay_loading = false;
                         self.ui.status_message = Some(format!(
@@ -197,6 +204,10 @@ impl App {
                     Ok(AppEvent::SourceUpdated) | Ok(AppEvent::SourceClosed(_)) => {}
                     Ok(AppEvent::ReplayRecordsLoaded(records)) => {
                         self.apply_loaded_records(records)?;
+                        needs_redraw = true;
+                    }
+                    Ok(AppEvent::ReplayRecordsReplaced(records)) => {
+                        self.replace_loaded_records(records)?;
                         needs_redraw = true;
                     }
                     Ok(AppEvent::ReplayLoadFinished) => {

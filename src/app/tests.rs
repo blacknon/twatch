@@ -4,7 +4,7 @@
 
 use super::{App, FilterMode, FocusPane};
 use crate::cli::{Cli, DiffModeArg, ScreenshotFormatArg};
-use crate::logging::{LogRecord, append_record};
+use crate::logging::{LogRecord, append_delta_record, append_record, compact_active_log};
 use crate::runner::{CaptureFrame, FrameSource, SourceEvent};
 use crate::screen::ScreenSnapshot;
 use anyhow::Result;
@@ -1436,15 +1436,73 @@ fn replay_mode_prefetches_initial_frames_and_defers_rest() {
         app.metadata.len() + usize::from(app.current_snapshot.is_some()),
         super::state::REPLAY_INITIAL_LOAD_FRAMES
     );
-    assert!(app.replay_loader.is_some());
+    assert!(app.replay_loader.is_none());
     assert!(app.replay_loading);
-    assert_eq!(app.current_label(), Some("frame-255"));
+    assert_eq!(app.current_label(), Some("frame-299"));
     assert_eq!(
         app.ui.status_message.as_deref(),
-        Some("replay loading: 256 frames ready, more loading in background")
+        Some("replay loading recent tail: 64 frames ready, older history loading in background")
     );
 
     let _ = fs::remove_file(path);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn replay_mode_prefetches_recent_tail_when_spill_exists() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-replay-spill-tail");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    let mut previous = None;
+    for index in 0..80u64 {
+        let record = LogRecord {
+            label: format!("frame-{index}"),
+            changed: true,
+            timestamp_unix_ms: index + 1,
+            frame_seq: index + 1,
+            width: 20,
+            height: 5,
+            changed_cell_count: 1,
+            input_event_count_since_prev: 0,
+            resized: false,
+            resize_from_width: 0,
+            resize_from_height: 0,
+            resize_to_width: 0,
+            resize_to_height: 0,
+            resize_source: String::new(),
+            snapshot: ScreenSnapshot::from_text_lines(20, 5, &[&format!("line-{index}")]),
+        };
+        append_delta_record(
+            cli.replay.as_deref().unwrap(),
+            &record,
+            previous.as_ref(),
+            120,
+        )
+        .unwrap();
+        previous = Some(record.snapshot);
+    }
+    compact_active_log(cli.replay.as_deref().unwrap(), 8).unwrap();
+
+    let app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+
+    assert_eq!(app.current_label(), Some("frame-79"));
+    assert_eq!(app.loaded_frame_count(), 8);
+    assert!(app.replay_loader.is_none());
+    assert!(app.replay_loading);
+    assert_eq!(
+        app.ui.status_message.as_deref(),
+        Some("replay loading recent tail: 8 frames ready, older history loading in background")
+    );
+
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_file(format!("{}.spill.gz", path.to_string_lossy()));
     let _ = fs::remove_dir_all(dir);
 }
 

@@ -7,7 +7,10 @@ use std::path::Path;
 
 use super::{App, FocusPane};
 use crate::history::{HistoryMetadata, HistoryStore};
-use crate::logging::{LogRecord, LogRecordStream, append_delta_record, load_records};
+use crate::logging::{
+    LogRecord, LogRecordStream, active_spill_exists, append_delta_record,
+    load_recent_records_from_plain_path, load_records, load_records_from_single_path,
+};
 
 impl App {
     pub(super) fn delete_selected_history(&mut self) -> Result<()> {
@@ -117,14 +120,49 @@ impl App {
     }
 
     pub(super) fn load_history_from_replay_log_prefetch(&mut self) -> Result<()> {
-        let Some(path) = &self.logfile else {
+        let Some(path) = self.logfile.clone() else {
             return Ok(());
         };
-        if !Path::new(path).exists() {
+        if !Path::new(&path).exists() {
             return Ok(());
         }
 
-        let mut stream = LogRecordStream::open(path)?;
+        if active_spill_exists(&path) {
+            let mut loaded = load_records_from_single_path(&path)?;
+            let keep = super::state::REPLAY_INITIAL_LOAD_FRAMES;
+            if loaded.len() > keep {
+                let split_at = loaded.len() - keep;
+                loaded.drain(0..split_at);
+            }
+
+            self.apply_loaded_records(loaded)?;
+            self.replay_reload_path = Some(path);
+            self.replay_loading = true;
+            self.ui.status_message = Some(format!(
+                "replay loading recent tail: {} frames ready, older history loading in background",
+                self.loaded_frame_count()
+            ));
+            return Ok(());
+        }
+
+        if path.ends_with(".jsonl") {
+            let loaded = load_recent_records_from_plain_path(
+                &path,
+                super::state::REPLAY_INITIAL_LOAD_FRAMES,
+            )?;
+            if !loaded.is_empty() {
+                self.apply_loaded_records(loaded)?;
+                self.replay_reload_path = Some(path);
+                self.replay_loading = true;
+                self.ui.status_message = Some(format!(
+                    "replay loading recent tail: {} frames ready, older history loading in background",
+                    self.loaded_frame_count()
+                ));
+                return Ok(());
+            }
+        }
+
+        let mut stream = LogRecordStream::open(&path)?;
         let mut loaded = Vec::new();
 
         while loaded.len() < super::state::REPLAY_INITIAL_LOAD_FRAMES {
@@ -143,6 +181,45 @@ impl App {
                 "replay loading: {} frames ready, more loading in background",
                 self.loaded_frame_count()
             ));
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn replace_loaded_records(&mut self, records: Vec<LogRecord>) -> Result<()> {
+        let preserve_follow_latest = self.follow_latest;
+        let preserve_frame_seq = if self.follow_latest {
+            self.current_metadata
+                .as_ref()
+                .map(|metadata| metadata.frame_seq)
+        } else {
+            self.metadata
+                .get(self.selected_index)
+                .map(|metadata| metadata.frame_seq)
+        };
+
+        self.history = HistoryStore::new(self.checkpoint_interval, self.compress);
+        self.metadata.clear();
+        self.current_snapshot = None;
+        self.current_metadata = None;
+        self.filtered.clear();
+        self.selected_index = 0;
+        self.follow_latest = preserve_follow_latest;
+        self.invalidate_view_cache();
+
+        self.apply_loaded_records(records)?;
+
+        if !preserve_follow_latest {
+            if let Some(frame_seq) = preserve_frame_seq
+                && let Some(index) = self
+                    .metadata
+                    .iter()
+                    .position(|metadata| metadata.frame_seq == frame_seq)
+            {
+                self.follow_latest = false;
+                self.selected_index = index;
+                self.rebuild_filter()?;
+            }
         }
 
         Ok(())
