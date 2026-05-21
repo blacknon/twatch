@@ -14,6 +14,7 @@ use crate::runner::FrameSource;
 
 pub(super) const REPLAY_INITIAL_LOAD_FRAMES: usize = 16;
 pub(super) const REPLAY_SYNC_SMALL_SPILL_MAX_BYTES: u64 = 128 * 1024;
+pub(super) const REPLAY_SYNC_LATEST_SPILL_MAX_BYTES: u64 = 1024 * 1024;
 
 pub(super) fn replay_prefetch_record_count() -> usize {
     REPLAY_INITIAL_LOAD_FRAMES.saturating_add(1)

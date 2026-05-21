@@ -9,8 +9,8 @@ use super::{App, AppHistoryMetadata, FocusPane, ReplayReplaceState};
 use crate::history::{HistoryMetadata, HistoryStore};
 use crate::logging::{
     LogRecord, LogRecordStream, append_delta_record, load_recent_records_from_cache,
-    load_recent_records_from_plain_path, load_recent_records_from_single_path, load_records,
-    replay_path_info,
+    load_recent_records_from_plain_path, load_recent_records_from_single_path,
+    load_records_from_single_path, load_records, replay_path_info,
 };
 
 impl App {
@@ -132,12 +132,26 @@ impl App {
         let replay_uses_manifest = path.ends_with(".replay.json");
 
         if !replay_info.spill_paths.is_empty() {
+            let latest_spill_records = replay_info
+                .spill_paths
+                .last()
+                .filter(|spill_path| {
+                    std::fs::metadata(spill_path)
+                        .ok()
+                        .map(|meta| meta.len() <= super::state::REPLAY_SYNC_LATEST_SPILL_MAX_BYTES)
+                        .unwrap_or(false)
+                })
+                .map(|spill_path| load_records_from_single_path(spill_path))
+                .transpose()?
+                .unwrap_or_default();
             let cached = load_recent_records_from_cache(
                 &path,
                 super::state::replay_prefetch_record_count(),
             )?;
             if !cached.is_empty() {
-                self.apply_loaded_records(cached)?;
+                let mut loaded = latest_spill_records;
+                loaded.extend(cached);
+                self.apply_loaded_records(loaded)?;
                 if replay_uses_manifest {
                     self.replay_reload_path = Some(path);
                     self.replay_loading = true;
@@ -174,7 +188,9 @@ impl App {
                 &path,
                 super::state::replay_prefetch_record_count(),
             )?;
-            self.apply_loaded_records(loaded)?;
+            let mut prefetched = latest_spill_records;
+            prefetched.extend(loaded);
+            self.apply_loaded_records(prefetched)?;
             if replay_uses_manifest {
                 self.replay_reload_path = Some(path);
                 self.replay_loading = true;
