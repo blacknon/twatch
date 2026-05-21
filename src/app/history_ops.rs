@@ -8,8 +8,9 @@ use std::path::Path;
 use super::{App, AppHistoryMetadata, FocusPane, ReplayReplaceState};
 use crate::history::{HistoryMetadata, HistoryStore};
 use crate::logging::{
-    LogRecord, LogRecordStream, active_spill_exists, active_spill_size_bytes, append_delta_record,
+    LogRecord, LogRecordStream, append_delta_record, load_recent_records_from_cache,
     load_recent_records_from_plain_path, load_recent_records_from_single_path, load_records,
+    replay_path_info,
 };
 
 impl App {
@@ -127,9 +128,40 @@ impl App {
             return Ok(());
         }
 
-        if active_spill_exists(&path) {
-            if active_spill_size_bytes(&path)
-                .is_some_and(|bytes| bytes <= super::state::REPLAY_SYNC_SMALL_SPILL_MAX_BYTES)
+        let replay_info = replay_path_info(&path)?;
+        let replay_uses_manifest = path.ends_with(".replay.json");
+
+        if !replay_info.spill_paths.is_empty() {
+            let cached = load_recent_records_from_cache(
+                &path,
+                super::state::replay_prefetch_record_count(),
+            )?;
+            if !cached.is_empty() {
+                self.apply_loaded_records(cached)?;
+                if replay_uses_manifest {
+                    self.replay_reload_path = Some(path);
+                    self.replay_loading = true;
+                    self.ui.status_message = Some(format!(
+                        "replay loading recent cache: {} history frames ready, older history loading in background",
+                        self.metadata.len()
+                    ));
+                } else {
+                    self.replay_deferred_path = Some(path);
+                    self.replay_loading = false;
+                    self.ui.status_message = Some(format!(
+                        "replay loaded recent cache: {} history frames ready, load older history on demand",
+                        self.metadata.len()
+                    ));
+                }
+                return Ok(());
+            }
+
+            let total_spill_size_bytes: u64 = replay_info
+                .spill_paths
+                .iter()
+                .filter_map(|spill_path| std::fs::metadata(spill_path).ok().map(|meta| meta.len()))
+                .sum();
+            if total_spill_size_bytes <= super::state::REPLAY_SYNC_SMALL_SPILL_MAX_BYTES
             {
                 self.apply_loaded_records(load_records(&path)?)?;
                 self.ui.status_message = Some(format!(
@@ -143,12 +175,21 @@ impl App {
                 super::state::replay_prefetch_record_count(),
             )?;
             self.apply_loaded_records(loaded)?;
-            self.replay_reload_path = Some(path);
-            self.replay_loading = true;
-            self.ui.status_message = Some(format!(
-                "replay loading recent tail: {} history frames ready, older history loading in background",
-                self.metadata.len()
-            ));
+            if replay_uses_manifest {
+                self.replay_reload_path = Some(path);
+                self.replay_loading = true;
+                self.ui.status_message = Some(format!(
+                    "replay loading recent tail: {} history frames ready, older history loading in background",
+                    self.metadata.len()
+                ));
+            } else {
+                self.replay_deferred_path = Some(path);
+                self.replay_loading = false;
+                self.ui.status_message = Some(format!(
+                    "replay loaded recent tail: {} history frames ready, load older history on demand",
+                    self.metadata.len()
+                ));
+            }
             return Ok(());
         }
 

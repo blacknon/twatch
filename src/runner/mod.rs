@@ -9,7 +9,10 @@ use anyhow::{Context, Result};
 use crossterm::event::{KeyEvent, MouseEvent};
 use time::{OffsetDateTime, format_description::FormatItem, macros::format_description};
 
-use crate::logging::load_records;
+use crate::logging::{
+    load_recent_records_from_cache, load_recent_records_from_plain_path,
+    load_recent_records_from_single_path, load_records, replay_path_info,
+};
 use crate::screen::ScreenSnapshot;
 
 mod capture_hook;
@@ -91,11 +94,7 @@ impl DemoRunner {
 
 impl ReplayRunner {
     pub fn from_log(path: &str) -> Result<Self> {
-        let records = load_records(path)?;
-        let record = records
-            .last()
-            .cloned()
-            .context("replay log does not contain any frames")?;
+        let record = latest_replay_record(path)?;
         Ok(Self {
             frame: CaptureFrame {
                 label: record.label,
@@ -106,6 +105,33 @@ impl ReplayRunner {
             },
         })
     }
+}
+
+fn latest_replay_record(path: &str) -> Result<crate::logging::LogRecord> {
+    if let Ok(cached) = load_recent_records_from_cache(path, 1)
+        && let Some(record) = cached.into_iter().last()
+    {
+        return Ok(record);
+    }
+
+    let replay_info = replay_path_info(path)?;
+    if replay_info.current_log.ends_with(".jsonl") {
+        let recent = load_recent_records_from_plain_path(&replay_info.current_log, 1)?;
+        if let Some(record) = recent.into_iter().last() {
+            return Ok(record);
+        }
+    }
+
+    let recent = load_recent_records_from_single_path(path, 1)?;
+    if let Some(record) = recent.into_iter().last() {
+        return Ok(record);
+    }
+
+    let records = load_records(path)?;
+    records
+        .last()
+        .cloned()
+        .context("replay log does not contain any frames")
 }
 
 impl FrameSource for DemoRunner {

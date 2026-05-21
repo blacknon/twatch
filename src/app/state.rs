@@ -58,6 +58,7 @@ impl App {
             source,
             replay_loader: None,
             replay_reload_path: None,
+            replay_deferred_path: None,
             replay_loader_rx: None,
             replay_loading: false,
             last_mouse_input: None,
@@ -89,27 +90,7 @@ impl App {
 
     pub(super) fn start_replay_loader(&mut self) {
         if let Some(path) = self.replay_reload_path.take() {
-            let (tx, rx) = mpsc::channel();
-            self.replay_loader_rx = Some(rx);
-            self.replay_loading = true;
-            let checkpoint_interval = self.checkpoint_interval;
-            let compress = self.compress;
-            std::thread::spawn(move || {
-                match build_replay_replace_state(&path, checkpoint_interval, compress) {
-                    Ok(state) => {
-                        if tx
-                            .send(ReplayLoadMessage::ReplaceState(Box::new(state)))
-                            .is_err()
-                        {
-                            return;
-                        }
-                        let _ = tx.send(ReplayLoadMessage::Finished);
-                    }
-                    Err(err) => {
-                        let _ = tx.send(ReplayLoadMessage::Failed(err.to_string()));
-                    }
-                }
-            });
+            self.start_replay_replace_loader_for_path(path);
             return;
         }
 
@@ -144,6 +125,38 @@ impl App {
 
                 if tx.send(ReplayLoadMessage::Records(chunk)).is_err() {
                     return;
+                }
+            }
+        });
+    }
+
+    pub(super) fn start_deferred_replay_loader(&mut self) -> bool {
+        let Some(path) = self.replay_deferred_path.take() else {
+            return false;
+        };
+        self.start_replay_replace_loader_for_path(path);
+        true
+    }
+
+    fn start_replay_replace_loader_for_path(&mut self, path: String) {
+        let (tx, rx) = mpsc::channel();
+        self.replay_loader_rx = Some(rx);
+        self.replay_loading = true;
+        let checkpoint_interval = self.checkpoint_interval;
+        let compress = self.compress;
+        std::thread::spawn(move || {
+            match build_replay_replace_state(&path, checkpoint_interval, compress) {
+                Ok(state) => {
+                    if tx
+                        .send(ReplayLoadMessage::ReplaceState(Box::new(state)))
+                        .is_err()
+                    {
+                        return;
+                    }
+                    let _ = tx.send(ReplayLoadMessage::Finished);
+                }
+                Err(err) => {
+                    let _ = tx.send(ReplayLoadMessage::Failed(err.to_string()));
                 }
             }
         });

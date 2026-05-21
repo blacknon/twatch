@@ -1501,12 +1501,77 @@ fn replay_mode_prefetches_recent_tail_when_spill_exists() {
     assert_eq!(app.metadata.len(), 7);
     assert!(app.current_snapshot.is_some());
     assert!(app.replay_loader.is_none());
+    assert!(!app.replay_loading);
+    assert_eq!(
+        app.ui.status_message.as_deref(),
+        Some("replay loaded recent tail: 7 history frames ready, load older history on demand",)
+    );
+
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_file(format!("{}.spill.gz", path.to_string_lossy()));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn moving_past_oldest_loaded_history_starts_deferred_replay_load() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-replay-deferred-load");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    let mut previous = None;
+    for index in 0..80u64 {
+        let line = (0..512usize)
+            .map(|offset| format!("{:08x}", index.saturating_mul(512) + offset as u64))
+            .collect::<Vec<_>>()
+            .join("");
+        let record = LogRecord {
+            label: format!("frame-{index}"),
+            changed: true,
+            timestamp_unix_ms: index + 1,
+            frame_seq: index + 1,
+            width: 20,
+            height: 5,
+            changed_cell_count: 1,
+            input_event_count_since_prev: 0,
+            resized: false,
+            resize_from_width: 0,
+            resize_from_height: 0,
+            resize_to_width: 0,
+            resize_to_height: 0,
+            resize_source: String::new(),
+            snapshot: ScreenSnapshot::from_text_lines(5000, 5, &[&line]),
+        };
+        append_delta_record(
+            cli.replay.as_deref().unwrap(),
+            &record,
+            previous.as_ref(),
+            120,
+        )
+        .unwrap();
+        previous = Some(record.snapshot);
+    }
+    compact_active_log(cli.replay.as_deref().unwrap(), 8).unwrap();
+
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+
+    assert!(app.replay_deferred_path.is_some());
+    assert!(!app.replay_loading);
+
+    app.follow_latest = false;
+    app.selected_index = *app.filtered.last().unwrap();
+    app.move_down();
+
+    assert!(app.replay_deferred_path.is_none());
     assert!(app.replay_loading);
     assert_eq!(
         app.ui.status_message.as_deref(),
-        Some(
-            "replay loading recent tail: 7 history frames ready, older history loading in background",
-        )
+        Some("loading older replay history in background")
     );
 
     let _ = fs::remove_file(&path);

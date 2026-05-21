@@ -165,6 +165,12 @@ impl Cell {
     }
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub(crate) struct DeltaCell {
+    pub symbol: Symbol,
+    pub style_id: u32,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct CompactCell {
     symbol: Symbol,
@@ -342,6 +348,16 @@ impl ScreenSnapshot {
         self.index(x, y).map(|idx| self.decode_cell(idx))
     }
 
+    pub(crate) fn delta_cell(&self, x: u16, y: u16) -> Option<DeltaCell> {
+        self.index(x, y).map(|idx| {
+            let cell = &self.cells[idx];
+            DeltaCell {
+                symbol: cell.symbol.clone(),
+                style_id: cell.style_id,
+            }
+        })
+    }
+
     pub fn set_cell(&mut self, x: u16, y: u16, cell: Cell) {
         if let Some(idx) = self.index(x, y) {
             self.cells[idx] = CompactCell {
@@ -441,6 +457,21 @@ impl ScreenSnapshot {
                 self.cells[*idx] = CompactCell {
                     symbol: cell.symbol.clone(),
                     style_id: self.intern_style(cell.style),
+                };
+            }
+        }
+    }
+
+    pub(crate) fn apply_delta_changes(&mut self, changes: &[(usize, DeltaCell)], styles: &[Style]) {
+        for (idx, cell) in changes {
+            if *idx < self.cells.len() {
+                let style = styles
+                    .get(cell.style_id as usize)
+                    .copied()
+                    .unwrap_or_default();
+                self.cells[*idx] = CompactCell {
+                    symbol: cell.symbol.clone(),
+                    style_id: self.intern_style(style),
                 };
             }
         }

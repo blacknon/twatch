@@ -341,6 +341,7 @@ pub struct App {
     source: Box<dyn FrameSource>,
     replay_loader: Option<LogRecordStream>,
     replay_reload_path: Option<String>,
+    replay_deferred_path: Option<String>,
     replay_loader_rx: Option<mpsc::Receiver<ReplayLoadMessage>>,
     replay_loading: bool,
     last_mouse_input: Option<Instant>,

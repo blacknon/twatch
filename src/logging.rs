@@ -3,9 +3,9 @@
 // that can be found in the LICENSE file.
 
 use std::collections::VecDeque;
-use std::fs::{File, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -21,6 +21,10 @@ use crate::screen::{Cell, ScreenSnapshot, Style, Symbol};
 const LOG_INLINE_PAYLOAD_MIN_BYTES: usize = 96;
 const COMPACT_ARCHIVE_EXTENSION: &str = ".twar";
 const ACTIVE_SPILL_EXTENSION: &str = ".spill.gz";
+const ACTIVE_SPILL_SEGMENT_EXTENSION_PREFIX: &str = ".spill.";
+const ACTIVE_SPILL_SEGMENT_MAX_BYTES: u64 = 1024 * 1024;
+const ACTIVE_RECENT_CACHE_EXTENSION: &str = ".recent.jsonl";
+const REPLAY_MANIFEST_EXTENSION: &str = ".replay.json";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -60,6 +64,21 @@ struct StoredLogRecord {
     resize_source: String,
     snapshot: Option<InlinePayload<ScreenSnapshot>>,
     delta: Option<InlinePayload<LogFrameDelta>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ReplayManifestFile {
+    version: u32,
+    current_log: String,
+    recent_cache: Option<String>,
+    spill_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ReplayPathInfo {
+    pub current_log: String,
+    pub recent_cache: Option<String>,
+    pub spill_paths: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -587,6 +606,25 @@ pub fn append_record(path: &str, record: &LogRecord) -> Result<()> {
     write_stored_record(path, &StoredLogRecord::from_full(record)?)
 }
 
+pub fn append_recent_record(
+    path: &str,
+    record: &LogRecord,
+    retain_recent_records: usize,
+) -> Result<()> {
+    let Some(recent_path) = active_recent_cache_path(path) else {
+        return Ok(());
+    };
+
+    write_stored_record(&recent_path, &StoredLogRecord::from_full(record)?)?;
+
+    let retain_recent_records = retain_recent_records.max(1);
+    if record.frame_seq % retain_recent_records as u64 == 0 {
+        compact_recent_cache(&recent_path, retain_recent_records)?;
+    }
+
+    Ok(())
+}
+
 pub fn append_delta_record(
     path: &str,
     record: &LogRecord,
@@ -703,9 +741,7 @@ fn load_stored_records_from_path(path: &str) -> Result<Vec<StoredLogRecord>> {
 
 fn load_stored_records(path: &str) -> Result<Vec<StoredLogRecord>> {
     let mut records = Vec::new();
-    if let Some(spill_path) = active_spill_path(path)
-        && Path::new(&spill_path).exists()
-    {
+    for spill_path in active_spill_paths(path) {
         records.extend(load_stored_records_from_path(&spill_path)?);
     }
     records.extend(load_stored_records_from_path(path)?);
@@ -713,13 +749,14 @@ fn load_stored_records(path: &str) -> Result<Vec<StoredLogRecord>> {
 }
 
 pub fn load_records_from_single_path(path: &str) -> Result<Vec<LogRecord>> {
-    if !Path::new(path).exists() {
+    let info = replay_path_info(path)?;
+    if !Path::new(&info.current_log).exists() {
         return Ok(Vec::new());
     }
 
     let mut previous_snapshot = None;
     let mut records = Vec::new();
-    for stored in load_stored_records_from_path(path)? {
+    for stored in load_stored_records_from_path(&info.current_log)? {
         let record = stored.into_log_record(previous_snapshot.as_ref())?;
         previous_snapshot = Some(record.snapshot.clone());
         records.push(record);
@@ -754,15 +791,40 @@ pub fn load_recent_records_from_single_path(
     Ok(records)
 }
 
+pub fn load_recent_records_from_cache(path: &str, max_records: usize) -> Result<Vec<LogRecord>> {
+    let info = replay_path_info(path)?;
+    let Some(recent_path) = info.recent_cache else {
+        return Ok(Vec::new());
+    };
+    if !Path::new(&recent_path).exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut records = load_records_from_single_path(&recent_path)?;
+    if records.len() > max_records {
+        let split_at = records.len() - max_records;
+        records.drain(0..split_at);
+    }
+    Ok(records)
+}
+
 pub fn active_spill_exists(path: &str) -> bool {
-    active_spill_path(path)
-        .as_ref()
-        .is_some_and(|spill_path| Path::new(spill_path).exists())
+    replay_path_info(path)
+        .map(|info| !info.spill_paths.is_empty())
+        .unwrap_or(false)
 }
 
 pub fn active_spill_size_bytes(path: &str) -> Option<u64> {
-    let spill_path = active_spill_path(path)?;
-    std::fs::metadata(spill_path).ok().map(|meta| meta.len())
+    let paths = replay_path_info(path).ok()?.spill_paths;
+    if paths.is_empty() {
+        return None;
+    }
+    Some(
+        paths
+            .into_iter()
+            .filter_map(|spill_path| fs::metadata(spill_path).ok().map(|meta| meta.len()))
+            .sum(),
+    )
 }
 
 pub fn load_recent_records_from_plain_path(
@@ -914,11 +976,18 @@ pub fn compact_active_log(path: &str, retain_recent_records: usize) -> Result<()
     let current_full_records = load_records_from_single_path(path)?;
 
     let split_at = current_records.len() - retain_recent_records;
-    let Some(spill_path) = active_spill_path(path) else {
+    let Some(mut spill_path) = active_spill_append_path(path) else {
         return Ok(());
     };
 
     for record in &current_records[..split_at] {
+        if fs::metadata(&spill_path)
+            .ok()
+            .map(|meta| meta.len() >= ACTIVE_SPILL_SEGMENT_MAX_BYTES)
+            .unwrap_or(false)
+        {
+            spill_path = active_spill_append_path(path).unwrap_or(spill_path);
+        }
         write_stored_record(&spill_path, record)?;
     }
     let mut tail_records = Vec::with_capacity(current_records.len() - split_at);
@@ -942,17 +1011,20 @@ pub struct LogRecordStream {
 
 impl LogRecordStream {
     pub fn open(path: &str) -> Result<Self> {
-        let source = if is_compact_archive_path(path) {
-            LogRecordStreamSource::Queue(VecDeque::from(load_stored_records(path)?))
-        } else if let Some(spill_path) = active_spill_path(path)
-            && Path::new(&spill_path).exists()
-        {
+        let info = replay_path_info(path)?;
+        let source = if is_compact_archive_path(&info.current_log) {
+            LogRecordStreamSource::Queue(VecDeque::from(load_stored_records_from_path(
+                &info.current_log,
+            )?))
+        } else if !info.spill_paths.is_empty() {
             let mut readers = VecDeque::new();
-            readers.push_back(open_log_reader(&spill_path)?);
-            readers.push_back(open_log_reader(path)?);
+            for spill_path in info.spill_paths {
+                readers.push_back(open_log_reader(&spill_path)?);
+            }
+            readers.push_back(open_log_reader(&info.current_log)?);
             LogRecordStreamSource::Readers(readers)
         } else {
-            LogRecordStreamSource::Reader(open_log_reader(path)?)
+            LogRecordStreamSource::Reader(open_log_reader(&info.current_log)?)
         };
         Ok(Self {
             source,
@@ -1062,12 +1134,138 @@ fn is_compact_archive_path(path: &str) -> bool {
     path.ends_with(COMPACT_ARCHIVE_EXTENSION)
 }
 
+fn is_replay_manifest_path(path: &str) -> bool {
+    path.ends_with(REPLAY_MANIFEST_EXTENSION)
+}
+
+fn load_replay_manifest(path: &str) -> Result<ReplayManifestFile> {
+    let file =
+        File::open(path).with_context(|| format!("failed to open replay manifest: {path}"))?;
+    serde_json::from_reader(BufReader::new(file)).context("failed to parse replay manifest")
+}
+
+pub fn replay_path_info(path: &str) -> Result<ReplayPathInfo> {
+    if is_replay_manifest_path(path) {
+        let manifest = load_replay_manifest(path)?;
+        return Ok(ReplayPathInfo {
+            current_log: manifest.current_log,
+            recent_cache: manifest.recent_cache,
+            spill_paths: manifest.spill_paths,
+        });
+    }
+
+    Ok(ReplayPathInfo {
+        current_log: path.to_string(),
+        recent_cache: active_recent_cache_path(path),
+        spill_paths: active_spill_paths(path),
+    })
+}
+
 pub fn active_spill_path(path: &str) -> Option<String> {
     if path.ends_with(".jsonl") {
         Some(format!("{path}{ACTIVE_SPILL_EXTENSION}"))
     } else {
         None
     }
+}
+
+pub fn active_recent_cache_path(path: &str) -> Option<String> {
+    if path.ends_with(".jsonl") {
+        Some(format!("{path}{ACTIVE_RECENT_CACHE_EXTENSION}"))
+    } else {
+        None
+    }
+}
+
+pub fn active_spill_paths(path: &str) -> Vec<String> {
+    let Some(legacy_path) = active_spill_path(path) else {
+        return Vec::new();
+    };
+    let legacy_name = Path::new(&legacy_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let mut paths = Vec::new();
+    if Path::new(&legacy_path).exists() {
+        paths.push(legacy_path);
+    }
+
+    let path_buf = PathBuf::from(path);
+    let Some(parent) = path_buf.parent() else {
+        return paths;
+    };
+    let Some(file_name) = path_buf.file_name().and_then(|name| name.to_str()) else {
+        return paths;
+    };
+    let prefix = format!("{file_name}{ACTIVE_SPILL_SEGMENT_EXTENSION_PREFIX}");
+
+    let Ok(entries) = fs::read_dir(parent) else {
+        return paths;
+    };
+
+    let mut segmented = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let file_name = entry.file_name();
+            let file_name = file_name.to_str()?;
+            if file_name != legacy_name
+                && file_name.starts_with(&prefix)
+                && file_name.ends_with(".gz")
+            {
+                Some(entry.path().to_string_lossy().to_string())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    segmented.sort();
+    paths.extend(segmented);
+    paths
+}
+
+fn active_spill_append_path(path: &str) -> Option<String> {
+    let paths = active_spill_paths(path);
+    if let Some(last_path) = paths.last() {
+        let size = fs::metadata(last_path)
+            .ok()
+            .map(|meta| meta.len())
+            .unwrap_or(0);
+        if size < ACTIVE_SPILL_SEGMENT_MAX_BYTES {
+            return Some(last_path.clone());
+        }
+    }
+
+    if paths.is_empty() {
+        return active_spill_path(path);
+    }
+
+    let path_buf = PathBuf::from(path);
+    let parent = path_buf.parent()?;
+    let file_name = path_buf.file_name()?.to_str()?;
+    let segmented_count = paths
+        .iter()
+        .filter(|candidate| candidate.contains(ACTIVE_SPILL_SEGMENT_EXTENSION_PREFIX))
+        .count();
+    let next_index = segmented_count + 1;
+    Some(
+        parent
+            .join(format!(
+                "{file_name}{ACTIVE_SPILL_SEGMENT_EXTENSION_PREFIX}{next_index:04}.gz"
+            ))
+            .to_string_lossy()
+            .to_string(),
+    )
+}
+
+fn compact_recent_cache(path: &str, retain_recent_records: usize) -> Result<()> {
+    let records = load_stored_records_from_path(path)?;
+    if records.len() <= retain_recent_records {
+        return Ok(());
+    }
+    let split_at = records.len() - retain_recent_records;
+    write_stored_records(path, &records[split_at..])
 }
 
 fn store_inline_payload<T>(value: &T, compress: bool) -> Result<InlinePayload<T>>
@@ -1117,8 +1315,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::{
-        LogFrameDelta, LogRecord, LogRecordStream, active_spill_path, append_delta_record,
-        append_record, compact_active_log, load_recent_records_from_plain_path,
+        LogFrameDelta, LogRecord, LogRecordStream, active_spill_path, active_spill_paths,
+        append_delta_record, append_recent_record, append_record, compact_active_log,
+        load_recent_records_from_cache, load_recent_records_from_plain_path,
         load_recent_records_from_single_path, load_records, pack_log_as_compact_archive,
     };
     use crate::screen::ScreenSnapshot;
@@ -1187,7 +1386,7 @@ mod tests {
         assert_eq!(loaded[0].snapshot.lines(), vec!["alpha".to_string()]);
         assert_eq!(loaded[1].snapshot.lines(), vec!["alpHb".to_string()]);
 
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -1239,7 +1438,7 @@ mod tests {
         assert_eq!(loaded[0].snapshot.lines(), vec!["alpha".to_string()]);
         assert_eq!(loaded[1].snapshot.lines(), vec!["alpHb".to_string()]);
 
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -1284,7 +1483,7 @@ mod tests {
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].snapshot.lines(), record.snapshot.lines());
 
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -1361,7 +1560,7 @@ mod tests {
         assert_eq!(stream.next_record().unwrap().unwrap().label, "two");
         assert!(!stream.has_more().unwrap());
 
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
@@ -1427,6 +1626,7 @@ mod tests {
             std::process::id()
         ));
         let spill = active_spill_path(path.to_str().unwrap()).unwrap();
+        remove_all_spills(path.to_str().unwrap());
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&spill);
 
@@ -1464,8 +1664,9 @@ mod tests {
         assert_eq!(loaded.first().unwrap().label, "f0");
         assert_eq!(loaded.last().unwrap().label, "f9");
 
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(spill);
+        remove_all_spills(path.to_str().unwrap());
     }
 
     #[test]
@@ -1473,6 +1674,7 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("twatch-stream-spill-{}.jsonl", std::process::id()));
         let spill = active_spill_path(path.to_str().unwrap()).unwrap();
+        remove_all_spills(path.to_str().unwrap());
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&spill);
 
@@ -1509,8 +1711,197 @@ mod tests {
 
         assert_eq!(labels, vec!["f0", "f1", "f2", "f3", "f4", "f5"]);
 
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(spill);
+        remove_all_spills(path.to_str().unwrap());
+    }
+
+    #[test]
+    fn stream_reads_multiple_spill_segments_sequentially() {
+        let path = std::env::temp_dir().join(format!(
+            "twatch-stream-spill-segments-{}.jsonl",
+            std::process::id()
+        ));
+        let legacy_spill = active_spill_path(path.to_str().unwrap()).unwrap();
+        let segmented_spill = format!("{}.spill.0001.gz", path.to_string_lossy());
+        remove_all_spills(path.to_str().unwrap());
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&legacy_spill);
+        let _ = std::fs::remove_file(&segmented_spill);
+
+        let records = [
+            LogRecord {
+                label: "f0".to_string(),
+                changed: true,
+                timestamp_unix_ms: 1,
+                frame_seq: 1,
+                width: 8,
+                height: 1,
+                changed_cell_count: 1,
+                input_event_count_since_prev: 0,
+                resized: false,
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: "stdin".to_string(),
+                snapshot: ScreenSnapshot::from_text_lines(8, 1, &["line-0"]),
+            },
+            LogRecord {
+                label: "f1".to_string(),
+                changed: true,
+                timestamp_unix_ms: 2,
+                frame_seq: 2,
+                width: 8,
+                height: 1,
+                changed_cell_count: 1,
+                input_event_count_since_prev: 0,
+                resized: false,
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: "stdin".to_string(),
+                snapshot: ScreenSnapshot::from_text_lines(8, 1, &["line-1"]),
+            },
+            LogRecord {
+                label: "f2".to_string(),
+                changed: true,
+                timestamp_unix_ms: 3,
+                frame_seq: 3,
+                width: 8,
+                height: 1,
+                changed_cell_count: 1,
+                input_event_count_since_prev: 0,
+                resized: false,
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: "stdin".to_string(),
+                snapshot: ScreenSnapshot::from_text_lines(8, 1, &["line-2"]),
+            },
+        ];
+
+        super::write_stored_record(
+            &legacy_spill,
+            &super::StoredLogRecord::from_full(&records[0]).unwrap(),
+        )
+        .unwrap();
+        super::write_stored_record(
+            &segmented_spill,
+            &super::StoredLogRecord::from_full(&records[1]).unwrap(),
+        )
+        .unwrap();
+        super::write_stored_record(
+            path.to_str().unwrap(),
+            &super::StoredLogRecord::from_full(&records[2]).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = load_records(path.to_str().unwrap()).unwrap();
+        assert_eq!(
+            loaded
+                .iter()
+                .map(|record| record.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["f0", "f1", "f2"]
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(legacy_spill);
+        let _ = std::fs::remove_file(segmented_spill);
+        remove_all_spills(path.to_str().unwrap());
+    }
+
+    #[test]
+    fn stream_reads_replay_manifest_with_external_spill_segments() {
+        let path =
+            std::env::temp_dir().join(format!("twatch-replay-manifest-{}.jsonl", std::process::id()));
+        let spill = format!("{}.spill.0001.gz", path.to_string_lossy());
+        let recent = format!("{}.recent.jsonl", path.to_string_lossy());
+        let manifest = format!("{}.replay.json", path.to_string_lossy());
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&spill);
+        let _ = std::fs::remove_file(&recent);
+        let _ = std::fs::remove_file(&manifest);
+
+        super::write_stored_record(
+            &spill,
+            &super::StoredLogRecord::from_full(&LogRecord {
+                label: "f0".to_string(),
+                changed: true,
+                timestamp_unix_ms: 1,
+                frame_seq: 1,
+                width: 8,
+                height: 1,
+                changed_cell_count: 1,
+                input_event_count_since_prev: 0,
+                resized: false,
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: "stdin".to_string(),
+                snapshot: ScreenSnapshot::from_text_lines(8, 1, &["line-0"]),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        super::write_stored_record(
+            path.to_str().unwrap(),
+            &super::StoredLogRecord::from_full(&LogRecord {
+                label: "f1".to_string(),
+                changed: true,
+                timestamp_unix_ms: 2,
+                frame_seq: 2,
+                width: 8,
+                height: 1,
+                changed_cell_count: 1,
+                input_event_count_since_prev: 0,
+                resized: false,
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: "stdin".to_string(),
+                snapshot: ScreenSnapshot::from_text_lines(8, 1, &["line-1"]),
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            &recent,
+            std::fs::read_to_string(path.to_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            &manifest,
+            format!(
+                "{{\"version\":1,\"current_log\":\"{}\",\"recent_cache\":\"{}\",\"spill_paths\":[\"{}\"]}}",
+                path.to_string_lossy(),
+                recent,
+                spill
+            ),
+        )
+        .unwrap();
+
+        let loaded = load_records(&manifest).unwrap();
+        assert_eq!(
+            loaded
+                .iter()
+                .map(|record| record.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["f0", "f1"]
+        );
+        let cached = load_recent_records_from_cache(&manifest, 8).unwrap();
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].label, "f1");
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&spill);
+        let _ = std::fs::remove_file(&recent);
+        let _ = std::fs::remove_file(&manifest);
     }
 
     #[test]
@@ -1559,6 +1950,7 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("twatch-tail-single-{}.jsonl", std::process::id()));
         let spill = active_spill_path(path.to_str().unwrap()).unwrap();
+        remove_all_spills(path.to_str().unwrap());
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&spill);
 
@@ -1598,5 +1990,54 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&spill);
+        remove_all_spills(path.to_str().unwrap());
+    }
+
+    #[test]
+    fn loads_recent_records_from_recent_cache_sidecar() {
+        let path =
+            std::env::temp_dir().join(format!("twatch-recent-cache-{}.jsonl", std::process::id()));
+        let recent = super::active_recent_cache_path(path.to_str().unwrap()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&recent);
+
+        for index in 0..20u64 {
+            let record = LogRecord {
+                label: format!("f{index}"),
+                changed: true,
+                timestamp_unix_ms: index + 1,
+                frame_seq: index + 1,
+                width: 8,
+                height: 1,
+                changed_cell_count: 1,
+                input_event_count_since_prev: 0,
+                resized: false,
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: "stdin".to_string(),
+                snapshot: ScreenSnapshot::from_text_lines(8, 1, &[&format!("line-{index}")]),
+            };
+            append_recent_record(path.to_str().unwrap(), &record, 8).unwrap();
+        }
+
+        let records = load_recent_records_from_cache(path.to_str().unwrap(), 4).unwrap();
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["f16", "f17", "f18", "f19"]
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&recent);
+    }
+
+    fn remove_all_spills(path: &str) {
+        for spill in active_spill_paths(path) {
+            let _ = std::fs::remove_file(spill);
+        }
     }
 }

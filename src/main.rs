@@ -21,7 +21,7 @@ use twatch::app::App;
 use twatch::batch;
 use twatch::cli::Cli;
 use twatch::logging::{
-    LogRecord, active_spill_path, append_delta_record, compact_active_log,
+    LogRecord, active_spill_path, append_delta_record, append_recent_record, compact_active_log,
     pack_log_as_compact_archive,
 };
 use twatch::runner::{DemoRunner, FrameSource, PipeRunner, PtyRunner, ReplayRunner, SourceEvent};
@@ -147,6 +147,7 @@ fn run_record_stdin(cli: Cli) -> Result<()> {
     let spill_every = cli.record_stdin_spill_every;
     let spill_retain = cli.record_stdin_spill_retain.max(1);
     let checkpoint_interval = cli.checkpoint_interval.max(1) as u64;
+    let recent_retain = spill_retain.max(16);
 
     loop {
         match wait_for_batch_source_update(update_rx.as_ref(), &source) {
@@ -162,29 +163,31 @@ fn run_record_stdin(cli: Cli) -> Result<()> {
         let changed_cell_count = frame
             .snapshot
             .changed_cell_count_since(previous_snapshot.as_ref());
+        let record = LogRecord {
+            label: frame.label.clone(),
+            changed: frame.changed,
+            timestamp_unix_ms: frame.timestamp_unix_ms,
+            frame_seq: next_frame_seq,
+            width: frame.snapshot.width(),
+            height: frame.snapshot.height(),
+            changed_cell_count,
+            input_event_count_since_prev: 0,
+            resized: false,
+            resize_from_width: 0,
+            resize_from_height: 0,
+            resize_to_width: 0,
+            resize_to_height: 0,
+            resize_source: "stdin".to_string(),
+            snapshot: frame.snapshot.clone(),
+        };
 
         append_delta_record(
             path,
-            &LogRecord {
-                label: frame.label,
-                changed: frame.changed,
-                timestamp_unix_ms: frame.timestamp_unix_ms,
-                frame_seq: next_frame_seq,
-                width: frame.snapshot.width(),
-                height: frame.snapshot.height(),
-                changed_cell_count,
-                input_event_count_since_prev: 0,
-                resized: false,
-                resize_from_width: 0,
-                resize_from_height: 0,
-                resize_to_width: 0,
-                resize_to_height: 0,
-                resize_source: "stdin".to_string(),
-                snapshot: frame.snapshot.clone(),
-            },
+            &record,
             previous_snapshot.as_ref(),
             checkpoint_interval,
         )?;
+        append_recent_record(path, &record, recent_retain)?;
         previous_snapshot = Some(frame.snapshot);
         if spill_every > 0
             && active_spill_path(path).is_some()

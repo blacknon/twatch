@@ -12,7 +12,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::diff::{LineDiff, WordDiff, diff_lines, diff_words};
-use crate::screen::{Cell, ScreenSnapshot};
+use crate::screen::{DeltaCell, ScreenSnapshot, Style};
+
+const RECENT_RAW_HISTORY_ENTRIES: usize = 256;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -49,7 +51,8 @@ struct HistoryEntry {
 struct FrameDelta {
     width: u16,
     height: u16,
-    changes: Vec<(usize, Cell)>,
+    changes: Vec<(usize, DeltaCell)>,
+    styles: Vec<Style>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -126,6 +129,7 @@ impl HistoryStore {
 
         self.entries.push(entry);
         self.last_snapshot = Some(snapshot);
+        self.compress_cold_entries()?;
         Ok(())
     }
 
@@ -254,11 +258,30 @@ impl HistoryStore {
                 .is_some_and(|entry| matches!(entry.kind, HistoryEntryKind::Checkpoint(_)))
         })
     }
+
+    fn compress_cold_entries(&mut self) -> Result<()> {
+        if self.compress || self.entries.len() <= RECENT_RAW_HISTORY_ENTRIES {
+            return Ok(());
+        }
+
+        let cold_index = self.entries.len() - RECENT_RAW_HISTORY_ENTRIES - 1;
+        let Some(entry) = self.entries.get_mut(cold_index) else {
+            return Ok(());
+        };
+
+        match &mut entry.kind {
+            HistoryEntryKind::Checkpoint(payload) => compress_payload_in_place(payload)?,
+            HistoryEntryKind::Delta(payload) => compress_payload_in_place(payload)?,
+        }
+
+        Ok(())
+    }
 }
 
 impl FrameDelta {
     fn between(before: &ScreenSnapshot, after: &ScreenSnapshot) -> Self {
         let mut changes = Vec::new();
+        let mut styles = vec![Style::default()];
 
         let after_width = after.width();
         let after_height = after.height();
@@ -272,7 +295,19 @@ impl FrameDelta {
                 let after_cell = after.cell(x, y).unwrap_or_default();
 
                 if before_cell != after_cell && x < after_width && y < after_height {
-                    changes.push((idx, after_cell));
+                    let mut delta_cell = after
+                        .delta_cell(x, y)
+                        .expect("delta cell must exist within bounds");
+                    let style = after_cell.style;
+                    delta_cell.style_id = styles
+                        .iter()
+                        .position(|item| *item == style)
+                        .map(|index| index as u32)
+                        .unwrap_or_else(|| {
+                            styles.push(style);
+                            (styles.len() - 1) as u32
+                        });
+                    changes.push((idx, delta_cell));
                 }
             }
         }
@@ -281,12 +316,13 @@ impl FrameDelta {
             width: after_width,
             height: after_height,
             changes,
+            styles,
         }
     }
 
     fn apply(&self, snapshot: &mut ScreenSnapshot) {
         snapshot.resize(self.width, self.height);
-        snapshot.apply_changes(&self.changes);
+        snapshot.apply_delta_changes(&self.changes, &self.styles);
     }
 }
 
@@ -321,6 +357,21 @@ where
     ))
 }
 
+fn compress_payload_in_place<T>(payload: &mut StoredPayload<T>) -> Result<()>
+where
+    T: Clone + Serialize,
+{
+    if matches!(payload, StoredPayload::Compressed(_)) {
+        return Ok(());
+    }
+
+    let StoredPayload::Raw(value) = payload else {
+        return Ok(());
+    };
+    *payload = store_payload(value.clone(), true)?;
+    Ok(())
+}
+
 fn load_payload<T>(payload: &StoredPayload<T>) -> Result<T>
 where
     T: Clone + DeserializeOwned,
@@ -341,7 +392,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{HistoryMetadata, HistoryStore};
-    use crate::screen::ScreenSnapshot;
+    use crate::screen::{Cell, ScreenSnapshot, Style, Symbol, TermColor};
 
     #[test]
     fn reconstructs_snapshots_from_checkpoints_and_deltas() {
@@ -451,6 +502,58 @@ mod tests {
         let word_diffs = history.word_diffs(0, 1).unwrap().expect("word diffs");
         assert_eq!(word_diffs[0].removed, vec!["pending".to_string()]);
         assert_eq!(word_diffs[0].added, vec!["running".to_string()]);
+    }
+
+    #[test]
+    fn reconstructs_styled_deltas_with_compact_cells() {
+        let mut history = HistoryStore::new(10, false);
+        let before = ScreenSnapshot::from_text_lines(4, 1, &["ab"]);
+        let mut after = ScreenSnapshot::from_text_lines(4, 1, &["ab"]);
+        after.set_cell(
+            1,
+            0,
+            Cell {
+                symbol: Symbol::from('Z'),
+                style: Style {
+                    fg: TermColor::Indexed(10),
+                    bg: TermColor::Indexed(0),
+                    bold: true,
+                    italic: false,
+                    underline: false,
+                    inverted: false,
+                },
+            },
+        );
+
+        history.push(before, meta("before")).unwrap();
+        history.push(after.clone(), meta("after")).unwrap();
+
+        let restored = history.snapshot(1).unwrap().expect("snapshot");
+        assert_eq!(restored, after);
+    }
+
+    #[test]
+    fn auto_compresses_cold_entries_even_without_c_flag() {
+        let mut history = HistoryStore::new(10, false);
+        for index in 0..300 {
+            history
+                .push(
+                    ScreenSnapshot::from_text_lines(12, 1, &[format!("jobs {index:04}")]),
+                    meta("x"),
+                )
+                .unwrap();
+        }
+
+        let stats = history.stats();
+        assert!(stats.compressed_entries > 0);
+        assert_eq!(
+            history
+                .snapshot(history.len() - 1)
+                .unwrap()
+                .expect("latest")
+                .lines()[0],
+            "jobs 0299".to_string()
+        );
     }
 
     fn meta(label: &str) -> HistoryMetadata {
