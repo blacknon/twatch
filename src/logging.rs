@@ -14,16 +14,21 @@ use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
+use rmp_serde::{from_read as rmp_from_read, from_slice as rmp_from_slice, to_vec as rmp_to_vec};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::history::HistoryMetadata;
 use crate::screen::{Cell, ScreenSnapshot, Style, Symbol};
 const LOG_INLINE_PAYLOAD_MIN_BYTES: usize = 96;
 const COMPACT_ARCHIVE_EXTENSION: &str = ".twar";
-const ACTIVE_SPILL_EXTENSION: &str = ".spill.gz";
+const ACTIVE_LOG_EXTENSION: &str = ".jsonl";
+const LEGACY_ACTIVE_LOG_EXTENSION: &str = ".mjl";
+const ACTIVE_SPILL_EXTENSION: &str = ".spill.mgz";
+const LEGACY_ACTIVE_SPILL_EXTENSION: &str = ".spill.gz";
 const ACTIVE_SPILL_SEGMENT_EXTENSION_PREFIX: &str = ".spill.";
 const ACTIVE_SPILL_SEGMENT_MAX_BYTES: u64 = 1024 * 1024;
 const ACTIVE_RECENT_CACHE_EXTENSION: &str = ".recent.jsonl";
+const LEGACY_ACTIVE_RECENT_CACHE_EXTENSION: &str = ".recent.mgz";
 const REPLAY_MANIFEST_EXTENSION: &str = ".replay.json";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -675,7 +680,16 @@ fn write_stored_record(path: &str, record: &StoredLogRecord) -> Result<()> {
         .append(true)
         .open(path)
         .with_context(|| format!("failed to open logfile for append: {path}"))?;
-    if is_gzip_log_path(path) {
+    if is_binary_spill_path(path) || is_binary_log_path(path) {
+        let bytes = rmp_to_vec(record).context("failed to serialize binary log record")?;
+        let mut encoder = GzEncoder::new(&mut file, Compression::fast());
+        encoder
+            .write_all(&bytes)
+            .context("failed to write binary log record")?;
+        encoder
+            .finish()
+            .context("failed to finalize binary log record")?;
+    } else if is_gzip_log_path(path) {
         let mut encoder = GzEncoder::new(&mut file, Compression::fast());
         serde_json::to_writer(&mut encoder, record).context("failed to write log record")?;
         encoder
@@ -696,9 +710,20 @@ fn write_stored_records(path: &str, records: &[StoredLogRecord]) -> Result<()> {
     let mut file = File::create(path)
         .with_context(|| format!("failed to create logfile for rewrite: {path}"))?;
     for record in records {
-        serde_json::to_writer(&mut file, record).context("failed to write log record")?;
-        file.write_all(b"\n")
-            .context("failed to terminate log line")?;
+        if is_binary_spill_path(path) || is_binary_log_path(path) {
+            let bytes = rmp_to_vec(record).context("failed to serialize binary log record")?;
+            let mut encoder = GzEncoder::new(&mut file, Compression::fast());
+            encoder
+                .write_all(&bytes)
+                .context("failed to write binary log record")?;
+            encoder
+                .finish()
+                .context("failed to finalize binary log record")?;
+        } else {
+            serde_json::to_writer(&mut file, record).context("failed to write log record")?;
+            file.write_all(b"\n")
+                .context("failed to terminate log line")?;
+        }
     }
     Ok(())
 }
@@ -718,6 +743,23 @@ fn load_stored_records_from_path(path: &str) -> Result<Vec<StoredLogRecord>> {
             .into_iter()
             .map(StoredLogRecord::from)
             .collect());
+    }
+
+    if is_binary_spill_path(path) || is_binary_log_path(path) {
+        let file = File::open(path).with_context(|| format!("failed to open logfile: {path}"))?;
+        let mut decoder = MultiGzDecoder::new(file);
+        let mut bytes = Vec::new();
+        decoder
+            .read_to_end(&mut bytes)
+            .context("failed to read binary log records")?;
+        let mut records = Vec::new();
+        let mut cursor = std::io::Cursor::new(bytes);
+        while (cursor.position() as usize) < cursor.get_ref().len() {
+            let stored: StoredLogRecord =
+                rmp_from_read(&mut cursor).context("failed to decode binary log record")?;
+            records.push(stored);
+        }
+        return Ok(records);
     }
 
     let file = File::open(path).with_context(|| format!("failed to open logfile: {path}"))?;
@@ -771,7 +813,7 @@ pub fn load_recent_records_from_single_path(
     if max_records == 0 || !Path::new(path).exists() {
         return Ok(Vec::new());
     }
-    if is_gzip_log_path(path) || is_compact_archive_path(path) {
+    if is_gzip_log_path(path) || is_compact_archive_path(path) || is_binary_spill_path(path) {
         let mut records = load_records_from_single_path(path)?;
         if records.len() > max_records {
             let split_at = records.len() - max_records;
@@ -793,9 +835,16 @@ pub fn load_recent_records_from_single_path(
 
 pub fn load_recent_records_from_cache(path: &str, max_records: usize) -> Result<Vec<LogRecord>> {
     let info = replay_path_info(path)?;
-    let Some(recent_path) = info.recent_cache else {
+    let Some(mut recent_path) = info.recent_cache else {
         return Ok(Vec::new());
     };
+    if !Path::new(&recent_path).exists() && info.current_log.ends_with(LEGACY_ACTIVE_LOG_EXTENSION)
+    {
+        recent_path = format!(
+            "{}{}",
+            info.current_log, LEGACY_ACTIVE_RECENT_CACHE_EXTENSION
+        );
+    }
     if !Path::new(&recent_path).exists() {
         return Ok(Vec::new());
     }
@@ -835,6 +884,7 @@ pub fn load_recent_records_from_plain_path(
         || !Path::new(path).exists()
         || is_gzip_log_path(path)
         || is_compact_archive_path(path)
+        || is_binary_spill_path(path)
     {
         return Ok(Vec::new());
     }
@@ -980,15 +1030,30 @@ pub fn compact_active_log(path: &str, retain_recent_records: usize) -> Result<()
         return Ok(());
     };
 
-    for record in &current_records[..split_at] {
+    let mut segment_starts_with_full = fs::metadata(&spill_path)
+        .ok()
+        .map(|meta| meta.len() == 0)
+        .unwrap_or(true);
+
+    for index in 0..split_at {
         if fs::metadata(&spill_path)
             .ok()
             .map(|meta| meta.len() >= ACTIVE_SPILL_SEGMENT_MAX_BYTES)
             .unwrap_or(false)
         {
             spill_path = active_spill_append_path(path).unwrap_or(spill_path);
+            segment_starts_with_full = true;
         }
-        write_stored_record(&spill_path, record)?;
+
+        if segment_starts_with_full {
+            write_stored_record(
+                &spill_path,
+                &StoredLogRecord::from_full(&current_full_records[index])?,
+            )?;
+            segment_starts_with_full = false;
+        } else {
+            write_stored_record(&spill_path, &current_records[index])?;
+        }
     }
     let mut tail_records = Vec::with_capacity(current_records.len() - split_at);
     tail_records.push(StoredLogRecord::from_full(&current_full_records[split_at])?);
@@ -998,8 +1063,13 @@ pub fn compact_active_log(path: &str, retain_recent_records: usize) -> Result<()
 }
 
 enum LogRecordStreamSource {
-    Reader(Box<dyn BufRead + Send>),
-    Readers(VecDeque<Box<dyn BufRead + Send>>),
+    Reader(StoredRecordReader),
+    Readers(VecDeque<StoredRecordReader>),
+    Queue(VecDeque<StoredLogRecord>),
+}
+
+enum StoredRecordReader {
+    Lines(Box<dyn BufRead + Send>),
     Queue(VecDeque<StoredLogRecord>),
 }
 
@@ -1012,17 +1082,20 @@ pub struct LogRecordStream {
 impl LogRecordStream {
     pub fn open(path: &str) -> Result<Self> {
         let info = replay_path_info(path)?;
-        let source = if is_compact_archive_path(&info.current_log) {
-            LogRecordStreamSource::Queue(VecDeque::from(load_stored_records_from_path(
-                &info.current_log,
-            )?))
-        } else if !info.spill_paths.is_empty() {
+        let source = if !info.spill_paths.is_empty() {
             let mut readers = VecDeque::new();
             for spill_path in info.spill_paths {
                 readers.push_back(open_log_reader(&spill_path)?);
             }
             readers.push_back(open_log_reader(&info.current_log)?);
             LogRecordStreamSource::Readers(readers)
+        } else if is_compact_archive_path(&info.current_log)
+            || is_binary_spill_path(&info.current_log)
+            || is_binary_log_path(&info.current_log)
+        {
+            LogRecordStreamSource::Queue(VecDeque::from(load_stored_records_from_path(
+                &info.current_log,
+            )?))
         } else {
             LogRecordStreamSource::Reader(open_log_reader(&info.current_log)?)
         };
@@ -1064,36 +1137,18 @@ impl LogRecordStream {
                 let Some(reader) = readers.front_mut() else {
                     return Ok(None);
                 };
-                let mut line = String::new();
-                let bytes = reader
-                    .read_line(&mut line)
-                    .context("failed to read log line")?;
-                if bytes == 0 {
+                let Some(stored) = read_next_stored_record(reader)? else {
                     readers.pop_front();
                     continue;
-                }
-                if line.trim().is_empty() {
-                    continue;
-                }
-                let stored: StoredLogRecord =
-                    serde_json::from_str(&line).context("failed to parse jsonl log record")?;
+                };
                 let record = stored.into_log_record(self.previous_snapshot.as_ref())?;
                 self.previous_snapshot = Some(record.snapshot.clone());
                 return Ok(Some(record));
             },
             LogRecordStreamSource::Reader(reader) => loop {
-                let mut line = String::new();
-                let bytes = reader
-                    .read_line(&mut line)
-                    .context("failed to read log line")?;
-                if bytes == 0 {
+                let Some(stored) = read_next_stored_record(reader)? else {
                     return Ok(None);
-                }
-                if line.trim().is_empty() {
-                    continue;
-                }
-                let stored: StoredLogRecord =
-                    serde_json::from_str(&line).context("failed to parse jsonl log record")?;
+                };
                 let record = stored.into_log_record(self.previous_snapshot.as_ref())?;
                 self.previous_snapshot = Some(record.snapshot.clone());
                 return Ok(Some(record));
@@ -1117,12 +1172,41 @@ pub fn load_records(path: &str) -> Result<Vec<LogRecord>> {
     Ok(records)
 }
 
-fn open_log_reader(path: &str) -> Result<Box<dyn BufRead + Send>> {
+fn open_log_reader(path: &str) -> Result<StoredRecordReader> {
+    if is_compact_archive_path(path) || is_binary_spill_path(path) || is_binary_log_path(path) {
+        return Ok(StoredRecordReader::Queue(VecDeque::from(
+            load_stored_records_from_path(path)?,
+        )));
+    }
+
     let file = File::open(path).with_context(|| format!("failed to open logfile: {path}"))?;
     if is_gzip_log_path(path) {
-        Ok(Box::new(BufReader::new(MultiGzDecoder::new(file))))
+        Ok(StoredRecordReader::Lines(Box::new(BufReader::new(
+            MultiGzDecoder::new(file),
+        ))))
     } else {
-        Ok(Box::new(BufReader::new(file)))
+        Ok(StoredRecordReader::Lines(Box::new(BufReader::new(file))))
+    }
+}
+
+fn read_next_stored_record(reader: &mut StoredRecordReader) -> Result<Option<StoredLogRecord>> {
+    match reader {
+        StoredRecordReader::Queue(records) => Ok(records.pop_front()),
+        StoredRecordReader::Lines(reader) => loop {
+            let mut line = String::new();
+            let bytes = reader
+                .read_line(&mut line)
+                .context("failed to read log line")?;
+            if bytes == 0 {
+                return Ok(None);
+            }
+            if line.trim().is_empty() {
+                continue;
+            }
+            let stored: StoredLogRecord =
+                serde_json::from_str(&line).context("failed to parse jsonl log record")?;
+            return Ok(Some(stored));
+        },
     }
 }
 
@@ -1136,6 +1220,19 @@ fn is_compact_archive_path(path: &str) -> bool {
 
 fn is_replay_manifest_path(path: &str) -> bool {
     path.ends_with(REPLAY_MANIFEST_EXTENSION)
+}
+
+fn is_binary_spill_path(path: &str) -> bool {
+    path.ends_with(".mgz")
+}
+
+fn is_binary_log_path(path: &str) -> bool {
+    path.ends_with(LEGACY_ACTIVE_LOG_EXTENSION)
+}
+
+fn active_log_stem(path: &str) -> Option<&str> {
+    path.strip_suffix(ACTIVE_LOG_EXTENSION)
+        .or_else(|| path.strip_suffix(LEGACY_ACTIVE_LOG_EXTENSION))
 }
 
 fn load_replay_manifest(path: &str) -> Result<ReplayManifestFile> {
@@ -1162,67 +1259,64 @@ pub fn replay_path_info(path: &str) -> Result<ReplayPathInfo> {
 }
 
 pub fn active_spill_path(path: &str) -> Option<String> {
-    if path.ends_with(".jsonl") {
-        Some(format!("{path}{ACTIVE_SPILL_EXTENSION}"))
-    } else {
-        None
-    }
+    active_log_stem(path).map(|_| format!("{path}{ACTIVE_SPILL_EXTENSION}"))
+}
+
+fn active_legacy_spill_path(path: &str) -> Option<String> {
+    active_log_stem(path).map(|_| format!("{path}{LEGACY_ACTIVE_SPILL_EXTENSION}"))
 }
 
 pub fn active_recent_cache_path(path: &str) -> Option<String> {
-    if path.ends_with(".jsonl") {
-        Some(format!("{path}{ACTIVE_RECENT_CACHE_EXTENSION}"))
-    } else {
-        None
-    }
+    active_log_stem(path).map(|_| format!("{path}{ACTIVE_RECENT_CACHE_EXTENSION}"))
 }
 
 pub fn active_spill_paths(path: &str) -> Vec<String> {
-    let Some(legacy_path) = active_spill_path(path) else {
+    let Some(current_path) = active_spill_path(path) else {
         return Vec::new();
     };
-    let legacy_name = Path::new(&legacy_path)
+    let path_buf = PathBuf::from(path);
+    let Some(parent) = path_buf.parent() else {
+        return Vec::new();
+    };
+    let Some(file_name) = path_buf.file_name().and_then(|name| name.to_str()) else {
+        return Vec::new();
+    };
+    let prefix = format!("{file_name}{ACTIVE_SPILL_SEGMENT_EXTENSION_PREFIX}");
+    let current_name = Path::new(&current_path)
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or_default()
         .to_string();
-
-    let mut paths = Vec::new();
-    if Path::new(&legacy_path).exists() {
-        paths.push(legacy_path);
-    }
-
-    let path_buf = PathBuf::from(path);
-    let Some(parent) = path_buf.parent() else {
-        return paths;
-    };
-    let Some(file_name) = path_buf.file_name().and_then(|name| name.to_str()) else {
-        return paths;
-    };
-    let prefix = format!("{file_name}{ACTIVE_SPILL_SEGMENT_EXTENSION_PREFIX}");
+    let legacy_path = active_legacy_spill_path(path);
+    let legacy_name = legacy_path
+        .as_ref()
+        .and_then(|value| Path::new(value).file_name().and_then(|name| name.to_str()))
+        .unwrap_or_default()
+        .to_string();
 
     let Ok(entries) = fs::read_dir(parent) else {
-        return paths;
+        return Vec::new();
     };
 
-    let mut segmented = entries
+    let mut all_paths = entries
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let file_name = entry.file_name();
             let file_name = file_name.to_str()?;
-            if file_name != legacy_name
-                && file_name.starts_with(&prefix)
-                && file_name.ends_with(".gz")
-            {
-                Some(entry.path().to_string_lossy().to_string())
-            } else {
-                None
-            }
+            let is_base_spill =
+                file_name == current_name || (!legacy_name.is_empty() && file_name == legacy_name);
+            let is_segmented_spill = file_name.starts_with(&prefix)
+                && (file_name.ends_with(".gz") || file_name.ends_with(".mgz"));
+            (is_base_spill || is_segmented_spill)
+                .then(|| entry.path().to_string_lossy().to_string())
         })
         .collect::<Vec<_>>();
-    segmented.sort();
-    paths.extend(segmented);
-    paths
+    all_paths.sort_by(|left, right| {
+        spill_sort_key(left)
+            .cmp(&spill_sort_key(right))
+            .then_with(|| left.cmp(right))
+    });
+    all_paths
 }
 
 fn active_spill_append_path(path: &str) -> Option<String> {
@@ -1244,19 +1338,41 @@ fn active_spill_append_path(path: &str) -> Option<String> {
     let path_buf = PathBuf::from(path);
     let parent = path_buf.parent()?;
     let file_name = path_buf.file_name()?.to_str()?;
-    let segmented_count = paths
+    let next_index = paths
         .iter()
-        .filter(|candidate| candidate.contains(ACTIVE_SPILL_SEGMENT_EXTENSION_PREFIX))
-        .count();
-    let next_index = segmented_count + 1;
+        .map(|candidate| spill_sort_key(candidate).0)
+        .max()
+        .unwrap_or(0)
+        + 1;
     Some(
         parent
             .join(format!(
-                "{file_name}{ACTIVE_SPILL_SEGMENT_EXTENSION_PREFIX}{next_index:04}.gz"
+                "{file_name}{ACTIVE_SPILL_SEGMENT_EXTENSION_PREFIX}{next_index:04}.mgz"
             ))
             .to_string_lossy()
             .to_string(),
     )
+}
+
+fn spill_sort_key(path: &str) -> (usize, String) {
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_string();
+    let Some(idx) = file_name.find(ACTIVE_SPILL_SEGMENT_EXTENSION_PREFIX) else {
+        return (usize::MAX, file_name);
+    };
+    let suffix = &file_name[(idx + ACTIVE_SPILL_SEGMENT_EXTENSION_PREFIX.len())..];
+    if suffix == "gz" || suffix == "mgz" {
+        return (0, file_name);
+    }
+    let numeric = suffix
+        .split('.')
+        .next()
+        .and_then(|part| part.parse::<usize>().ok())
+        .unwrap_or(usize::MAX - 1);
+    (numeric, file_name)
 }
 
 fn compact_recent_cache(path: &str, retain_recent_records: usize) -> Result<()> {
@@ -1276,7 +1392,7 @@ where
         return Ok(InlinePayload::Raw(value.clone()));
     }
 
-    let bytes = serde_json::to_vec(value).context("failed to serialize inline payload")?;
+    let bytes = rmp_to_vec(value).context("failed to serialize inline payload")?;
     if bytes.len() < LOG_INLINE_PAYLOAD_MIN_BYTES {
         return Ok(InlinePayload::Raw(value.clone()));
     }
@@ -1307,7 +1423,9 @@ where
             let mut out = Vec::new();
             std::io::Read::read_to_end(&mut decoder, &mut out)
                 .context("failed to decompress inline payload")?;
-            serde_json::from_slice(&out).context("failed to deserialize inline payload")
+            rmp_from_slice(&out)
+                .or_else(|_| serde_json::from_slice(&out))
+                .context("failed to deserialize inline payload")
         }
     }
 }
@@ -1817,9 +1935,9 @@ mod tests {
     #[test]
     fn stream_reads_replay_manifest_with_external_spill_segments() {
         let path =
-            std::env::temp_dir().join(format!("twatch-replay-manifest-{}.jsonl", std::process::id()));
-        let spill = format!("{}.spill.0001.gz", path.to_string_lossy());
-        let recent = format!("{}.recent.jsonl", path.to_string_lossy());
+            std::env::temp_dir().join(format!("twatch-replay-manifest-{}.mjl", std::process::id()));
+        let spill = format!("{}.spill.0001.mgz", path.to_string_lossy());
+        let recent = format!("{}.recent.mgz", path.to_string_lossy());
         let manifest = format!("{}.replay.json", path.to_string_lossy());
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&spill);
@@ -1870,11 +1988,7 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        std::fs::write(
-            &recent,
-            std::fs::read_to_string(path.to_str().unwrap()).unwrap(),
-        )
-        .unwrap();
+        std::fs::write(&recent, std::fs::read(path.to_str().unwrap()).unwrap()).unwrap();
         std::fs::write(
             &manifest,
             format!(

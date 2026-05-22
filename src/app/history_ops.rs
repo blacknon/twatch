@@ -9,8 +9,8 @@ use super::{App, AppHistoryMetadata, FocusPane, ReplayReplaceState};
 use crate::history::{HistoryMetadata, HistoryStore};
 use crate::logging::{
     LogRecord, LogRecordStream, append_delta_record, load_recent_records_from_cache,
-    load_recent_records_from_plain_path, load_recent_records_from_single_path,
-    load_records_from_single_path, load_records, replay_path_info,
+    load_recent_records_from_plain_path, load_recent_records_from_single_path, load_records,
+    load_records_from_single_path, replay_path_info,
 };
 
 impl App {
@@ -175,8 +175,7 @@ impl App {
                 .iter()
                 .filter_map(|spill_path| std::fs::metadata(spill_path).ok().map(|meta| meta.len()))
                 .sum();
-            if total_spill_size_bytes <= super::state::REPLAY_SYNC_SMALL_SPILL_MAX_BYTES
-            {
+            if total_spill_size_bytes <= super::state::REPLAY_SYNC_SMALL_SPILL_MAX_BYTES {
                 self.apply_loaded_records(load_records(&path)?)?;
                 self.ui.status_message = Some(format!(
                     "replay loaded: {} frames",

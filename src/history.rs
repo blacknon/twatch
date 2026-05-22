@@ -9,6 +9,7 @@ use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use regex::Regex;
+use rmp_serde::{from_slice as rmp_from_slice, to_vec as rmp_to_vec};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::diff::{LineDiff, WordDiff, diff_lines, diff_words};
@@ -345,7 +346,7 @@ where
         return Ok(StoredPayload::Raw(value));
     }
 
-    let bytes = serde_json::to_vec(&value).context("failed to serialize history payload")?;
+    let bytes = rmp_to_vec(&value).context("failed to serialize history payload")?;
     let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
     encoder
         .write_all(&bytes)
@@ -384,7 +385,9 @@ where
             decoder
                 .read_to_end(&mut out)
                 .context("failed to decompress history payload")?;
-            serde_json::from_slice(&out).context("failed to deserialize history payload")
+            rmp_from_slice(&out)
+                .or_else(|_| serde_json::from_slice(&out))
+                .context("failed to deserialize history payload")
         }
     }
 }

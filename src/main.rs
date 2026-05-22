@@ -7,6 +7,7 @@ use std::fs;
 use std::io::Write;
 use std::panic::{self, PanicHookInfo};
 use std::path::PathBuf;
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Once;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -28,6 +29,7 @@ use twatch::runner::{DemoRunner, FrameSource, PipeRunner, PtyRunner, ReplayRunne
 use twatch::screen::ScreenSnapshot;
 
 const DEMO_BATCH_INTERVAL: Duration = Duration::from_millis(500);
+const RECORD_STDIN_SETTLE_DELAY: Duration = Duration::from_millis(16);
 fn main() -> Result<()> {
     let cli = Cli::parse();
     if cli.pack_logfile.is_some() || cli.pack_output.is_some() {
@@ -150,7 +152,7 @@ fn run_record_stdin(cli: Cli) -> Result<()> {
     let recent_retain = spill_retain.max(16);
 
     loop {
-        match wait_for_batch_source_update(update_rx.as_ref(), &source) {
+        match wait_for_record_stdin_update(update_rx.as_ref(), &source) {
             BatchLoopStep::Capture => {}
             BatchLoopStep::Break => break,
         }
@@ -218,6 +220,57 @@ fn wait_for_batch_source_update(
     loop {
         match update_rx.recv() {
             Ok(SourceEvent::Updated) => return BatchLoopStep::Capture,
+            Ok(SourceEvent::Closed) | Err(_) => {
+                return if source.has_pending_update() {
+                    BatchLoopStep::Capture
+                } else {
+                    BatchLoopStep::Break
+                };
+            }
+            Ok(SourceEvent::ClosedWithError(_)) => {
+                return if source.has_pending_update() {
+                    BatchLoopStep::Capture
+                } else {
+                    BatchLoopStep::Break
+                };
+            }
+        }
+    }
+}
+
+fn wait_for_record_stdin_update(
+    update_rx: Option<&std::sync::mpsc::Receiver<SourceEvent>>,
+    source: &dyn FrameSource,
+) -> BatchLoopStep {
+    let Some(update_rx) = update_rx else {
+        return BatchLoopStep::Capture;
+    };
+
+    loop {
+        match update_rx.recv() {
+            Ok(SourceEvent::Updated) => {
+                let mut stream_closed = false;
+                loop {
+                    match update_rx.recv_timeout(RECORD_STDIN_SETTLE_DELAY) {
+                        Ok(SourceEvent::Updated) => continue,
+                        Ok(SourceEvent::Closed) | Err(RecvTimeoutError::Disconnected) => {
+                            stream_closed = true;
+                            break;
+                        }
+                        Ok(SourceEvent::ClosedWithError(_)) => {
+                            stream_closed = true;
+                            break;
+                        }
+                        Err(RecvTimeoutError::Timeout) => break,
+                    }
+                }
+
+                return if stream_closed && !source.has_pending_update() {
+                    BatchLoopStep::Break
+                } else {
+                    BatchLoopStep::Capture
+                };
+            }
             Ok(SourceEvent::Closed) | Err(_) => {
                 return if source.has_pending_update() {
                     BatchLoopStep::Capture

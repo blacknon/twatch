@@ -5,7 +5,9 @@
 use super::history_ops::build_replay_replace_state;
 use super::{App, FilterMode, FocusPane};
 use crate::cli::{Cli, DiffModeArg, ScreenshotFormatArg};
-use crate::logging::{LogRecord, append_delta_record, append_record, compact_active_log};
+use crate::logging::{
+    LogRecord, active_spill_paths, append_delta_record, append_record, compact_active_log,
+};
 use crate::runner::{CaptureFrame, FrameSource, SourceEvent};
 use crate::screen::ScreenSnapshot;
 use anyhow::Result;
@@ -1458,11 +1460,8 @@ fn replay_mode_prefetches_recent_tail_when_spill_exists() {
     cli.replay = Some(path.to_string_lossy().into_owned());
 
     let mut previous = None;
-    for index in 0..80u64 {
-        let line = (0..512usize)
-            .map(|offset| format!("{:08x}", index.saturating_mul(512) + offset as u64))
-            .collect::<Vec<_>>()
-            .join("");
+    for index in 0..160u64 {
+        let line = noisy_line(index + 1, 4096);
         let record = LogRecord {
             label: format!("frame-{index}"),
             changed: true,
@@ -1497,7 +1496,7 @@ fn replay_mode_prefetches_recent_tail_when_spill_exists() {
     )
     .unwrap();
 
-    assert_eq!(app.current_label(), Some("frame-79"));
+    assert_eq!(app.current_label(), Some("frame-159"));
     assert!(app.metadata.len() >= 7);
     assert!(app.current_snapshot.is_some());
     assert!(app.replay_loader.is_none());
@@ -1510,7 +1509,7 @@ fn replay_mode_prefetches_recent_tail_when_spill_exists() {
     );
 
     let _ = fs::remove_file(&path);
-    let _ = fs::remove_file(format!("{}.spill.gz", path.to_string_lossy()));
+    remove_spill_files(&path);
     let _ = fs::remove_dir_all(dir);
 }
 
@@ -1523,11 +1522,8 @@ fn moving_past_oldest_loaded_history_starts_deferred_replay_load() {
     cli.replay = Some(path.to_string_lossy().into_owned());
 
     let mut previous = None;
-    for index in 0..80u64 {
-        let line = (0..512usize)
-            .map(|offset| format!("{:08x}", index.saturating_mul(512) + offset as u64))
-            .collect::<Vec<_>>()
-            .join("");
+    for index in 0..160u64 {
+        let line = noisy_line(index + 1, 4096);
         let record = LogRecord {
             label: format!("frame-{index}"),
             changed: true,
@@ -1577,7 +1573,7 @@ fn moving_past_oldest_loaded_history_starts_deferred_replay_load() {
     );
 
     let _ = fs::remove_file(&path);
-    let _ = fs::remove_file(format!("{}.spill.gz", path.to_string_lossy()));
+    remove_spill_files(&path);
     let _ = fs::remove_dir_all(dir);
 }
 
@@ -1638,7 +1634,7 @@ fn replay_mode_loads_small_spill_history_immediately() {
     );
 
     let _ = fs::remove_file(&path);
-    let _ = fs::remove_file(format!("{}.spill.gz", path.to_string_lossy()));
+    remove_spill_files(&path);
     let _ = fs::remove_dir_all(dir);
 }
 
@@ -1703,7 +1699,7 @@ fn replay_replace_state_restores_full_history_after_prefetch() {
     assert_eq!(app.current_label(), Some("frame-39"));
 
     let _ = fs::remove_file(&path);
-    let _ = fs::remove_file(format!("{}.spill.gz", path.to_string_lossy()));
+    remove_spill_files(&path);
     let _ = fs::remove_dir_all(dir);
 }
 
@@ -1966,4 +1962,22 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!("{prefix}-{id}"))
+}
+
+fn remove_spill_files(path: &PathBuf) {
+    for spill in active_spill_paths(path.to_string_lossy().as_ref()) {
+        let _ = fs::remove_file(spill);
+    }
+}
+
+fn noisy_line(seed: u64, words: usize) -> String {
+    let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let mut line = String::with_capacity(words * 8);
+    for _ in 0..words {
+        state ^= state << 7;
+        state ^= state >> 9;
+        state ^= state << 8;
+        line.push_str(&format!("{:08x}", (state & 0xffff_ffff) as u32));
+    }
+    line
 }
