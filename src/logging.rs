@@ -1989,16 +1989,13 @@ mod tests {
         )
         .unwrap();
         std::fs::write(&recent, std::fs::read(path.to_str().unwrap()).unwrap()).unwrap();
-        std::fs::write(
-            &manifest,
-            format!(
-                "{{\"version\":1,\"current_log\":\"{}\",\"recent_cache\":\"{}\",\"spill_paths\":[\"{}\"]}}",
-                path.to_string_lossy(),
-                recent,
-                spill
-            ),
-        )
-        .unwrap();
+        let manifest_json = serde_json::json!({
+            "version": 1,
+            "current_log": path.to_string_lossy(),
+            "recent_cache": recent,
+            "spill_paths": [spill],
+        });
+        std::fs::write(&manifest, serde_json::to_vec(&manifest_json).unwrap()).unwrap();
 
         let loaded = load_records(&manifest).unwrap();
         assert_eq!(

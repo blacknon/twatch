@@ -7,8 +7,8 @@ use std::fs;
 use std::io::Write;
 use std::panic::{self, PanicHookInfo};
 use std::path::PathBuf;
-use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Once;
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
