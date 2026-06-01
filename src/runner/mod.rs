@@ -333,8 +333,10 @@ mod tests {
 
     #[test]
     fn replay_runner_reads_latest_frame_from_manifest_current_log() {
-        let path =
-            std::env::temp_dir().join(format!("twatch-replay-runner-manifest-{}.mjl", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "twatch-replay-runner-manifest-{}.mjl",
+            std::process::id()
+        ));
         let manifest = format!("{}.replay.json", path.to_string_lossy());
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&manifest);

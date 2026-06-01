@@ -177,9 +177,7 @@ impl App {
             while let Ok(event) = replay_rx.recv() {
                 let app_event = match event {
                     ReplayLoadMessage::Records(records) => AppEvent::ReplayRecordsLoaded(records),
-                    ReplayLoadMessage::ReplaceState(state) => {
-                        AppEvent::ReplayStateReplaced(*state)
-                    }
+                    ReplayLoadMessage::ReplaceState(state) => AppEvent::ReplayStateReplaced(*state),
                     ReplayLoadMessage::Finished => AppEvent::ReplayLoadFinished,
                     ReplayLoadMessage::Failed(err) => AppEvent::ReplayLoadFailed(err),
                 };

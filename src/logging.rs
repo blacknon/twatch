@@ -2122,7 +2122,8 @@ mod tests {
 
     #[test]
     fn loads_recent_records_from_single_path_manifest_current_log() {
-        let path = std::env::temp_dir().join(format!("twatch-tail-manifest-{}.mjl", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("twatch-tail-manifest-{}.mjl", std::process::id()));
         let recent = format!("{}.recent.mgz", path.to_string_lossy());
         let manifest = format!("{}.replay.json", path.to_string_lossy());
         let _ = std::fs::remove_file(&path);
@@ -2163,7 +2164,10 @@ mod tests {
 
         let records = load_recent_records_from_single_path(&manifest, 2).unwrap();
         assert_eq!(
-            records.iter().map(|record| record.label.as_str()).collect::<Vec<_>>(),
+            records
+                .iter()
+                .map(|record| record.label.as_str())
+                .collect::<Vec<_>>(),
             vec!["f2", "f3"]
         );
 
@@ -2216,7 +2220,8 @@ mod tests {
 
     #[test]
     fn active_spill_paths_finds_relative_logfile_sidecars() {
-        let dir = std::env::temp_dir().join(format!("twatch-relative-spill-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("twatch-relative-spill-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let previous_dir = std::env::current_dir().unwrap();
         std::env::set_current_dir(&dir).unwrap();
@@ -2232,10 +2237,16 @@ mod tests {
 
         let spills = active_spill_paths(path);
         assert_eq!(spills.len(), 2);
-        assert!(spills.iter().any(|candidate| candidate.ends_with("trace.jsonl.spill.mgz")));
-        assert!(spills
-            .iter()
-            .any(|candidate| candidate.ends_with("trace.jsonl.spill.0001.mgz")));
+        assert!(
+            spills
+                .iter()
+                .any(|candidate| candidate.ends_with("trace.jsonl.spill.mgz"))
+        );
+        assert!(
+            spills
+                .iter()
+                .any(|candidate| candidate.ends_with("trace.jsonl.spill.0001.mgz"))
+        );
 
         let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(&spill);
@@ -2246,7 +2257,10 @@ mod tests {
 
     #[test]
     fn loads_recent_plain_tail_returns_empty_without_snapshot_boundary() {
-        let path = std::env::temp_dir().join(format!("twatch-tail-delta-only-{}.jsonl", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "twatch-tail-delta-only-{}.jsonl",
+            std::process::id()
+        ));
         let _ = std::fs::remove_file(&path);
 
         for index in 1..4u64 {
