@@ -7,7 +7,7 @@ use std::sync::mpsc;
 
 use super::config::AppConfig;
 use super::history_ops::build_replay_replace_state;
-use super::{App, AppHistoryMetadata, FilterMode, InputMode, ReplayLoadMessage};
+use super::{App, AppEvent, AppHistoryMetadata, FilterMode, InputMode, ReplayLoadMessage};
 use crate::cli::Cli;
 use crate::history::HistoryStore;
 use crate::runner::FrameSource;
@@ -60,6 +60,7 @@ impl App {
             replay_loader: None,
             replay_reload_path: None,
             replay_deferred_path: None,
+            replay_event_tx: None,
             replay_loader_rx: None,
             replay_loading: false,
             last_mouse_input: None,
@@ -129,6 +130,7 @@ impl App {
                 }
             }
         });
+        self.attach_replay_loader_forwarder();
     }
 
     pub(super) fn start_deferred_replay_loader(&mut self) -> bool {
@@ -158,6 +160,31 @@ impl App {
                 }
                 Err(err) => {
                     let _ = tx.send(ReplayLoadMessage::Failed(err.to_string()));
+                }
+            }
+        });
+        self.attach_replay_loader_forwarder();
+    }
+
+    pub(super) fn attach_replay_loader_forwarder(&mut self) {
+        let Some(replay_tx) = self.replay_event_tx.clone() else {
+            return;
+        };
+        let Some(replay_rx) = self.replay_loader_rx.take() else {
+            return;
+        };
+        std::thread::spawn(move || {
+            while let Ok(event) = replay_rx.recv() {
+                let app_event = match event {
+                    ReplayLoadMessage::Records(records) => AppEvent::ReplayRecordsLoaded(records),
+                    ReplayLoadMessage::ReplaceState(state) => {
+                        AppEvent::ReplayStateReplaced(*state)
+                    }
+                    ReplayLoadMessage::Finished => AppEvent::ReplayLoadFinished,
+                    ReplayLoadMessage::Failed(err) => AppEvent::ReplayLoadFailed(err),
+                };
+                if replay_tx.send(app_event).is_err() {
+                    break;
                 }
             }
         });

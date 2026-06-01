@@ -810,11 +810,17 @@ pub fn load_recent_records_from_single_path(
     path: &str,
     max_records: usize,
 ) -> Result<Vec<LogRecord>> {
-    if max_records == 0 || !Path::new(path).exists() {
+    let info = replay_path_info(path)?;
+    let resolved_path = info.current_log.as_str();
+    if max_records == 0 || !Path::new(resolved_path).exists() {
         return Ok(Vec::new());
     }
-    if is_gzip_log_path(path) || is_compact_archive_path(path) || is_binary_spill_path(path) {
-        let mut records = load_records_from_single_path(path)?;
+    if is_gzip_log_path(resolved_path)
+        || is_compact_archive_path(resolved_path)
+        || is_binary_spill_path(resolved_path)
+        || is_binary_log_path(resolved_path)
+    {
+        let mut records = load_records_from_single_path(resolved_path)?;
         if records.len() > max_records {
             let split_at = records.len() - max_records;
             records.drain(0..split_at);
@@ -822,7 +828,7 @@ pub fn load_recent_records_from_single_path(
         return Ok(records);
     }
 
-    let stored = load_recent_stored_records_from_plain_path(path, max_records)?;
+    let stored = load_recent_stored_records_from_plain_path(resolved_path, max_records)?;
     let mut previous_snapshot = None;
     let mut records = Vec::with_capacity(stored.len());
     for record in stored {
@@ -939,6 +945,9 @@ fn load_recent_stored_records_from_plain_path(
         }
 
         if start == 0 || window_bytes >= MAX_WINDOW_BYTES {
+            if !starts_with_full_snapshot(&lines)? {
+                return Ok(Vec::new());
+            }
             return lines
                 .into_iter()
                 .map(|line| serde_json::from_str(&line).context("failed to parse jsonl log record"))
@@ -1275,9 +1284,7 @@ pub fn active_spill_paths(path: &str) -> Vec<String> {
         return Vec::new();
     };
     let path_buf = PathBuf::from(path);
-    let Some(parent) = path_buf.parent() else {
-        return Vec::new();
-    };
+    let parent = path_parent_dir(&path_buf);
     let Some(file_name) = path_buf.file_name().and_then(|name| name.to_str()) else {
         return Vec::new();
     };
@@ -1294,7 +1301,7 @@ pub fn active_spill_paths(path: &str) -> Vec<String> {
         .unwrap_or_default()
         .to_string();
 
-    let Ok(entries) = fs::read_dir(parent) else {
+    let Ok(entries) = fs::read_dir(&parent) else {
         return Vec::new();
     };
 
@@ -1336,7 +1343,7 @@ fn active_spill_append_path(path: &str) -> Option<String> {
     }
 
     let path_buf = PathBuf::from(path);
-    let parent = path_buf.parent()?;
+    let parent = path_parent_dir(&path_buf);
     let file_name = path_buf.file_name()?.to_str()?;
     let next_index = paths
         .iter()
@@ -1352,6 +1359,13 @@ fn active_spill_append_path(path: &str) -> Option<String> {
             .to_string_lossy()
             .to_string(),
     )
+}
+
+fn path_parent_dir(path: &Path) -> PathBuf {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
 }
 
 fn spill_sort_key(path: &str) -> (usize, String) {
@@ -1432,6 +1446,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use super::{
         LogFrameDelta, LogRecord, LogRecordStream, active_spill_path, active_spill_paths,
         append_delta_record, append_recent_record, append_record, compact_active_log,
@@ -2105,6 +2121,58 @@ mod tests {
     }
 
     #[test]
+    fn loads_recent_records_from_single_path_manifest_current_log() {
+        let path = std::env::temp_dir().join(format!("twatch-tail-manifest-{}.mjl", std::process::id()));
+        let recent = format!("{}.recent.mgz", path.to_string_lossy());
+        let manifest = format!("{}.replay.json", path.to_string_lossy());
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&recent);
+        let _ = std::fs::remove_file(&manifest);
+
+        for index in 0..4u64 {
+            super::write_stored_record(
+                path.to_str().unwrap(),
+                &super::StoredLogRecord::from_full(&LogRecord {
+                    label: format!("f{index}"),
+                    changed: true,
+                    timestamp_unix_ms: index + 1,
+                    frame_seq: index + 1,
+                    width: 8,
+                    height: 1,
+                    changed_cell_count: 1,
+                    input_event_count_since_prev: 0,
+                    resized: false,
+                    resize_from_width: 0,
+                    resize_from_height: 0,
+                    resize_to_width: 0,
+                    resize_to_height: 0,
+                    resize_source: "stdin".to_string(),
+                    snapshot: ScreenSnapshot::from_text_lines(8, 1, &[&format!("line-{index}")]),
+                })
+                .unwrap(),
+            )
+            .unwrap();
+        }
+        let manifest_json = serde_json::json!({
+            "version": 1,
+            "current_log": path.to_string_lossy(),
+            "recent_cache": recent,
+            "spill_paths": [],
+        });
+        std::fs::write(&manifest, serde_json::to_vec(&manifest_json).unwrap()).unwrap();
+
+        let records = load_recent_records_from_single_path(&manifest, 2).unwrap();
+        assert_eq!(
+            records.iter().map(|record| record.label.as_str()).collect::<Vec<_>>(),
+            vec!["f2", "f3"]
+        );
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&recent);
+        let _ = std::fs::remove_file(&manifest);
+    }
+
+    #[test]
     fn loads_recent_records_from_recent_cache_sidecar() {
         let path =
             std::env::temp_dir().join(format!("twatch-recent-cache-{}.jsonl", std::process::id()));
@@ -2144,6 +2212,82 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&recent);
+    }
+
+    #[test]
+    fn active_spill_paths_finds_relative_logfile_sidecars() {
+        let dir = std::env::temp_dir().join(format!("twatch-relative-spill-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let previous_dir = std::env::current_dir().unwrap();
+        std::env::set_current_dir(&dir).unwrap();
+
+        let path = "trace.jsonl";
+        let spill = active_spill_path(path).unwrap();
+        let segmented_spill = "trace.jsonl.spill.0001.mgz";
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&spill);
+        let _ = std::fs::remove_file(segmented_spill);
+        std::fs::write(&spill, b"").unwrap();
+        std::fs::write(segmented_spill, b"").unwrap();
+
+        let spills = active_spill_paths(path);
+        assert_eq!(spills.len(), 2);
+        assert!(spills.iter().any(|candidate| candidate.ends_with("trace.jsonl.spill.mgz")));
+        assert!(spills
+            .iter()
+            .any(|candidate| candidate.ends_with("trace.jsonl.spill.0001.mgz")));
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&spill);
+        let _ = std::fs::remove_file(segmented_spill);
+        std::env::set_current_dir(previous_dir).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn loads_recent_plain_tail_returns_empty_without_snapshot_boundary() {
+        let path = std::env::temp_dir().join(format!("twatch-tail-delta-only-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        for index in 1..4u64 {
+            let record = serde_json::json!({
+                "label": format!("f{index}"),
+                "timestamp_unix_ms": index,
+                "frame_seq": index,
+                "width": 8,
+                "height": 1,
+                "changed": true,
+                "changed_cell_count": 1,
+                "input_event_count_since_prev": 0,
+                "resized": false,
+                "resize_from_width": 0,
+                "resize_from_height": 0,
+                "resize_to_width": 0,
+                "resize_to_height": 0,
+                "resize_source": "stdin",
+                "snapshot": serde_json::Value::Null,
+                "delta": {
+                    "width": 8,
+                    "height": 1,
+                    "runs": [[0, 8, "x", 0]],
+                    "style_table": [{}]
+                }
+            });
+            let mut line = serde_json::to_vec(&record).unwrap();
+            line.push(b'\n');
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .unwrap()
+                .write_all(&line)
+                .unwrap();
+        }
+
+        let records = load_recent_records_from_plain_path(path.to_str().unwrap(), 2).unwrap();
+        assert!(records.is_empty());
+
+        let _ = std::fs::remove_file(&path);
     }
 
     fn remove_all_spills(path: &str) {

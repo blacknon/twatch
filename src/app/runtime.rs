@@ -11,7 +11,7 @@ use anyhow::Result;
 use crossterm::event::{self, Event};
 use ratatui::DefaultTerminal;
 
-use super::{App, AppEvent, LoopControl, ReplayLoadMessage};
+use super::{App, AppEvent, LoopControl};
 use crate::runner::SourceEvent;
 use crate::ui;
 
@@ -29,27 +29,9 @@ impl App {
             }
         });
 
+        self.replay_event_tx = Some(tx.clone());
         self.start_replay_loader();
-        if let Some(replay_rx) = self.replay_loader_rx.take() {
-            let replay_tx = tx.clone();
-            std::thread::spawn(move || {
-                while let Ok(event) = replay_rx.recv() {
-                    let app_event = match event {
-                        ReplayLoadMessage::Records(records) => {
-                            AppEvent::ReplayRecordsLoaded(records)
-                        }
-                        ReplayLoadMessage::ReplaceState(state) => {
-                            AppEvent::ReplayStateReplaced(*state)
-                        }
-                        ReplayLoadMessage::Finished => AppEvent::ReplayLoadFinished,
-                        ReplayLoadMessage::Failed(err) => AppEvent::ReplayLoadFailed(err),
-                    };
-                    if replay_tx.send(app_event).is_err() {
-                        break;
-                    }
-                }
-            });
-        }
+        self.attach_replay_loader_forwarder();
 
         if let Some(update_rx) = self.source.take_update_receiver() {
             let update_tx = tx.clone();

@@ -122,7 +122,7 @@ fn latest_replay_record(path: &str) -> Result<crate::logging::LogRecord> {
         }
     }
 
-    let recent = load_recent_records_from_single_path(path, 1)?;
+    let recent = load_recent_records_from_single_path(&replay_info.current_log, 1)?;
     if let Some(record) = recent.into_iter().last() {
         return Ok(record);
     }
@@ -329,6 +329,59 @@ mod tests {
         assert_eq!(frame.raw_output, "two\n\n\n\n");
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn replay_runner_reads_latest_frame_from_manifest_current_log() {
+        let path =
+            std::env::temp_dir().join(format!("twatch-replay-runner-manifest-{}.mjl", std::process::id()));
+        let manifest = format!("{}.replay.json", path.to_string_lossy());
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&manifest);
+
+        for (index, line) in ["one", "two"].into_iter().enumerate() {
+            append_record(
+                path.to_string_lossy().as_ref(),
+                &LogRecord {
+                    label: char::from(b'a' + index as u8).to_string(),
+                    changed: true,
+                    timestamp_unix_ms: index as u64 + 1,
+                    frame_seq: index as u64 + 1,
+                    width: 20,
+                    height: 5,
+                    changed_cell_count: 1,
+                    input_event_count_since_prev: 0,
+                    resized: false,
+                    resize_from_width: 0,
+                    resize_from_height: 0,
+                    resize_to_width: 0,
+                    resize_to_height: 0,
+                    resize_source: String::new(),
+                    snapshot: ScreenSnapshot::from_text_lines(20, 5, &[line]),
+                },
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            &manifest,
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "current_log": path.to_string_lossy(),
+                "recent_cache": serde_json::Value::Null,
+                "spill_paths": [],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut runner = ReplayRunner::from_log(&manifest).unwrap();
+        let frame = FrameSource::capture(&mut runner, 20, 5).unwrap();
+
+        assert_eq!(frame.label, "b");
+        assert_eq!(frame.raw_output, "two\n\n\n\n");
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(manifest);
     }
 
     #[test]

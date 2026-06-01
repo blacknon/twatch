@@ -15,7 +15,7 @@ use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::event::{KeyEvent, KeyEventState, MouseButton, MouseEvent, MouseEventKind};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 struct MockSource {
@@ -1571,6 +1571,67 @@ fn moving_past_oldest_loaded_history_starts_deferred_replay_load() {
         app.ui.status_message.as_deref(),
         Some("loading older replay history in background")
     );
+
+    let _ = fs::remove_file(&path);
+    remove_spill_files(&path);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn deferred_replay_loader_reconnects_to_runtime_event_channel() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-replay-deferred-forward");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    let mut previous = None;
+    for index in 0..160u64 {
+        let line = noisy_line(index + 1, 4096);
+        let record = LogRecord {
+            label: format!("frame-{index}"),
+            changed: true,
+            timestamp_unix_ms: index + 1,
+            frame_seq: index + 1,
+            width: 20,
+            height: 5,
+            changed_cell_count: 1,
+            input_event_count_since_prev: 0,
+            resized: false,
+            resize_from_width: 0,
+            resize_from_height: 0,
+            resize_to_width: 0,
+            resize_to_height: 0,
+            resize_source: String::new(),
+            snapshot: ScreenSnapshot::from_text_lines(5000, 5, &[&line]),
+        };
+        append_delta_record(
+            cli.replay.as_deref().unwrap(),
+            &record,
+            previous.as_ref(),
+            120,
+        )
+        .unwrap();
+        previous = Some(record.snapshot);
+    }
+    compact_active_log(cli.replay.as_deref().unwrap(), 8).unwrap();
+
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+    let (tx, rx) = mpsc::channel();
+    app.replay_event_tx = Some(tx);
+
+    app.follow_latest = false;
+    app.selected_index = *app.filtered.last().unwrap();
+    app.move_down();
+
+    let replaced = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(matches!(replaced, super::AppEvent::ReplayStateReplaced(_)));
+    let finished = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(matches!(finished, super::AppEvent::ReplayLoadFinished));
 
     let _ = fs::remove_file(&path);
     remove_spill_files(&path);

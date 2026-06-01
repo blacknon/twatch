@@ -342,6 +342,7 @@ pub struct App {
     replay_loader: Option<LogRecordStream>,
     replay_reload_path: Option<String>,
     replay_deferred_path: Option<String>,
+    replay_event_tx: Option<mpsc::Sender<AppEvent>>,
     replay_loader_rx: Option<mpsc::Receiver<ReplayLoadMessage>>,
     replay_loading: bool,
     last_mouse_input: Option<Instant>,
