@@ -2,9 +2,9 @@
 
 ## 0.1.5
 
-- Add `--record-stdin` with fixed-size terminal parsing so `twatch` can act as a tmux `pipe-pane` recording backend
-- Add `--size WIDTH,HEIGHT` for stdin recording and document the tmux-oriented JSONL recording flow
-- Store `--record-stdin` traces as periodic checkpoints plus deltas instead of writing a full snapshot on every frame
+- Add `--record-stdin` so `twatch` can record terminal output from stdin without spawning a child PTY
+- Add `--size WIDTH,HEIGHT` for fixed-size stdin recording and document the tmux-oriented JSONL recording flow
+- Store `--record-stdin` traces as checkpoints plus deltas instead of writing a full snapshot on every frame
 - Compact in-memory cell symbols, compress delta history when `-C` is enabled, and raise the default checkpoint interval to reduce long-running memory pressure
 - Add transparent `.jsonl.gz` log read/write support and make the tmux plugin default to `archive` compression so active pane replay stays faster
 - Compress large snapshot and delta payloads inside JSONL records so plain `.jsonl` traces also shrink without hiding frame metadata
@@ -14,8 +14,13 @@
 - Treat `-L 0` as unlimited history retention so tmux replay can avoid trimming large recordings on startup
 - Write active JSONL records in a more compact array-based format while keeping backward-compatible readers for older object-based logs
 
-This release adds the first backend-oriented building block for tmux integration.
-It lets `twatch` record terminal output from stdin into replayable JSONL traces without spawning a child PTY.
+This release is focused on tmux-oriented recording and replay scalability.
+It adds the first backend-oriented building block for `tmux pipe-pane` style integrations by letting `twatch` ingest terminal output from stdin and store it as replayable traces.
+
+Notes:
+
+- `--record-stdin` requires `--logfile` and cannot be combined with `--batch`, `--replay`, or a child command
+- Replay readers remain backward-compatible with older object-based JSONL logs
 
 ## 0.1.4
 
