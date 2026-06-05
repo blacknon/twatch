@@ -125,6 +125,17 @@ impl App {
             return;
         }
 
+        if offset > 0
+            && next_position as usize >= self.filtered.len().saturating_sub(1)
+            && !self.replay_loading
+            && self.replay_deferred_path.is_some()
+        {
+            if self.start_deferred_replay_loader() {
+                self.ui.status_message =
+                    Some("loading older replay history in background".to_string());
+            }
+        }
+
         let next = usize::min(
             next_position as usize,
             self.filtered.len().saturating_sub(1),

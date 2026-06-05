@@ -4,7 +4,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
@@ -24,9 +24,20 @@ pub(super) fn draw_history_overlay(frame: &mut Frame<'_>, app: &App, area: Rect)
 
     if !app.ui.show_history {
         frame.render_widget(
-            Paragraph::new("Hi")
-                .alignment(Alignment::Center)
-                .style(Style::default().fg(BORDER_IDLE).bg(PANEL_BG)),
+            Paragraph::new("Hi").alignment(Alignment::Center).style(
+                Style::default()
+                    .fg(if app.ui.focus == FocusPane::History {
+                        Color::Black
+                    } else {
+                        Color::White
+                    })
+                    .bg(if app.ui.focus == FocusPane::History {
+                        BORDER_ACTIVE
+                    } else {
+                        Color::Indexed(238)
+                    })
+                    .add_modifier(Modifier::BOLD | Modifier::RAPID_BLINK),
+            ),
             overlay,
         );
         return;

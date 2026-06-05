@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::aftercommand::AfterCommandRuntime;
@@ -13,6 +14,7 @@ use crate::cli::{DiffModeArg, ScreenshotFormatArg};
 use crate::history::HistoryMetadata;
 use crate::history::HistoryStore;
 use crate::keymap::KeyBinding;
+use crate::logging::{LogRecord, LogRecordStream};
 use crate::runner::FrameSource;
 use crate::screen::ScreenSnapshot;
 use crate::screenshot::ScreenshotFormat;
@@ -35,6 +37,24 @@ enum AppEvent {
     Terminal(crossterm::event::Event),
     SourceUpdated,
     SourceClosed(Option<String>),
+    ReplayRecordsLoaded(Vec<LogRecord>),
+    ReplayStateReplaced(ReplayReplaceState),
+    ReplayLoadFinished,
+    ReplayLoadFailed(String),
+}
+
+enum ReplayLoadMessage {
+    Records(Vec<LogRecord>),
+    ReplaceState(Box<ReplayReplaceState>),
+    Finished,
+    Failed(String),
+}
+
+struct ReplayReplaceState {
+    history: HistoryStore,
+    metadata: Vec<AppHistoryMetadata>,
+    current_snapshot: Option<ScreenSnapshot>,
+    current_metadata: Option<AppHistoryMetadata>,
 }
 
 enum LoopControl {
@@ -287,6 +307,7 @@ impl InputTraceEvent {
 
 pub struct App {
     pub debug: bool,
+    pub hide_header: bool,
     pub paused: bool,
     pub child_paused: bool,
     pub child_pause_supported: bool,
@@ -318,6 +339,12 @@ pub struct App {
     keymap: Vec<KeyBinding>,
     child_bindings: Vec<ChildBinding>,
     source: Box<dyn FrameSource>,
+    replay_loader: Option<LogRecordStream>,
+    replay_reload_path: Option<String>,
+    replay_deferred_path: Option<String>,
+    replay_event_tx: Option<mpsc::Sender<AppEvent>>,
+    replay_loader_rx: Option<mpsc::Receiver<ReplayLoadMessage>>,
+    replay_loading: bool,
     last_mouse_input: Option<Instant>,
     last_mouse_scroll_input: Option<Instant>,
     pending_mouse_escape: Option<BrokenMouseEscape>,

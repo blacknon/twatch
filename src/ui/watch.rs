@@ -140,7 +140,6 @@ impl WatchWidget<'_> {
             let cell = self
                 .snapshot
                 .cell(src_col as u16, row)
-                .cloned()
                 .unwrap_or_else(Cell::blank);
             let mut style = cell.style.to_ratatui();
             if self.cell_changed(src_col as u16, row) && matches!(self.diff_mode, DiffMode::Watch) {
@@ -161,7 +160,7 @@ impl WatchWidget<'_> {
             let symbol = if cell.symbol.is_empty() {
                 " "
             } else {
-                &cell.symbol
+                cell.symbol.as_str()
             };
             buf[(area.x + x, area.y + visible_row)]
                 .set_symbol(symbol)
@@ -213,28 +212,25 @@ fn draw_inspector(
 ) {
     let cell = snapshot
         .cell(inspect_x, inspect_y)
-        .cloned()
         .unwrap_or_else(Cell::blank);
-    let previous_cell = previous
-        .and_then(|snapshot| snapshot.cell(inspect_x, inspect_y))
-        .cloned();
+    let previous_cell = previous.and_then(|snapshot| snapshot.cell(inspect_x, inspect_y));
     let same_as_previous = previous_cell.as_ref().is_some_and(|before| before == &cell);
-    let symbol_label = if cell.symbol == " " {
+    let symbol_label = if cell.symbol.as_str() == " " {
         "<space>".to_string()
     } else if cell.symbol.is_empty() {
         "<empty>".to_string()
     } else {
-        cell.symbol.clone()
+        cell.symbol.as_str().to_string()
     };
     let previous_symbol = previous_cell
         .as_ref()
         .map(|cell| {
-            if cell.symbol == " " {
+            if cell.symbol.as_str() == " " {
                 "<space>".to_string()
             } else if cell.symbol.is_empty() {
                 "<empty>".to_string()
             } else {
-                cell.symbol.clone()
+                cell.symbol.as_str().to_string()
             }
         })
         .unwrap_or_else(|| "<none>".to_string());

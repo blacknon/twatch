@@ -2,9 +2,12 @@
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 
+use super::history_ops::build_replay_replace_state;
 use super::{App, FilterMode, FocusPane};
 use crate::cli::{Cli, DiffModeArg, ScreenshotFormatArg};
-use crate::logging::{LogRecord, append_record};
+use crate::logging::{
+    LogRecord, active_spill_paths, append_delta_record, append_record, compact_active_log,
+};
 use crate::runner::{CaptureFrame, FrameSource, SourceEvent};
 use crate::screen::ScreenSnapshot;
 use anyhow::Result;
@@ -12,7 +15,7 @@ use crossterm::event::{KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::event::{KeyEvent, KeyEventState, MouseButton, MouseEvent, MouseEventKind};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 struct MockSource {
@@ -612,6 +615,27 @@ fn history_overlay_row_selection_accounts_for_window_offset() {
     } else {
         assert_eq!(app.selected_index, app.filtered_indices()[start + 2]);
     }
+}
+
+#[test]
+fn limit_zero_keeps_full_history_visible() {
+    let mut cli = test_cli();
+    cli.limit = 0;
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(
+            (0..80).map(|i| frame(&format!("{i:04}"), &["x"])).collect(),
+        )),
+    )
+    .unwrap();
+
+    for _ in 0..80 {
+        app.capture(20, 5).unwrap();
+    }
+
+    assert_eq!(app.visible_history_start(), 0);
+    assert_eq!(app.visible_history_len(), app.history_len());
+    assert!(app.history_len() >= 79);
 }
 
 #[test]
@@ -1374,6 +1398,373 @@ fn replay_mode_loads_existing_log() {
 }
 
 #[test]
+fn replay_mode_prefetches_initial_frames_and_defers_rest() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-replay-prefetch");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    for index in 0..300u64 {
+        append_record(
+            cli.replay.as_deref().unwrap(),
+            &LogRecord {
+                label: format!("frame-{index}"),
+                changed: true,
+                timestamp_unix_ms: index + 1,
+                frame_seq: index + 1,
+                width: 20,
+                height: 5,
+                changed_cell_count: 1,
+                input_event_count_since_prev: 0,
+                resized: false,
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: String::new(),
+                snapshot: ScreenSnapshot::from_text_lines(20, 5, &[&format!("line-{index}")]),
+            },
+        )
+        .unwrap();
+    }
+
+    let app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+
+    assert_eq!(app.metadata.len(), super::state::REPLAY_INITIAL_LOAD_FRAMES);
+    assert!(app.current_snapshot.is_some());
+    assert!(app.replay_loader.is_none());
+    assert!(app.replay_loading);
+    assert_eq!(app.current_label(), Some("frame-299"));
+    assert_eq!(
+        app.ui.status_message.as_deref(),
+        Some(
+            "replay loading recent tail: 16 history frames ready, older history loading in background",
+        )
+    );
+
+    let _ = fs::remove_file(path);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn replay_mode_prefetches_recent_tail_when_spill_exists() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-replay-spill-tail");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    let mut previous = None;
+    for index in 0..160u64 {
+        let line = noisy_line(index + 1, 4096);
+        let record = LogRecord {
+            label: format!("frame-{index}"),
+            changed: true,
+            timestamp_unix_ms: index + 1,
+            frame_seq: index + 1,
+            width: 20,
+            height: 5,
+            changed_cell_count: 1,
+            input_event_count_since_prev: 0,
+            resized: false,
+            resize_from_width: 0,
+            resize_from_height: 0,
+            resize_to_width: 0,
+            resize_to_height: 0,
+            resize_source: String::new(),
+            snapshot: ScreenSnapshot::from_text_lines(5000, 5, &[&line]),
+        };
+        append_delta_record(
+            cli.replay.as_deref().unwrap(),
+            &record,
+            previous.as_ref(),
+            120,
+        )
+        .unwrap();
+        previous = Some(record.snapshot);
+    }
+    compact_active_log(cli.replay.as_deref().unwrap(), 8).unwrap();
+
+    let app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+
+    assert_eq!(app.current_label(), Some("frame-159"));
+    assert!(app.metadata.len() >= 7);
+    assert!(app.current_snapshot.is_some());
+    assert!(app.replay_loader.is_none());
+    assert!(!app.replay_loading);
+    assert!(
+        app.ui
+            .status_message
+            .as_deref()
+            .is_some_and(|message| message.starts_with("replay loaded recent tail: "))
+    );
+
+    let _ = fs::remove_file(&path);
+    remove_spill_files(&path);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn moving_past_oldest_loaded_history_starts_deferred_replay_load() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-replay-deferred-load");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    let mut previous = None;
+    for index in 0..160u64 {
+        let line = noisy_line(index + 1, 4096);
+        let record = LogRecord {
+            label: format!("frame-{index}"),
+            changed: true,
+            timestamp_unix_ms: index + 1,
+            frame_seq: index + 1,
+            width: 20,
+            height: 5,
+            changed_cell_count: 1,
+            input_event_count_since_prev: 0,
+            resized: false,
+            resize_from_width: 0,
+            resize_from_height: 0,
+            resize_to_width: 0,
+            resize_to_height: 0,
+            resize_source: String::new(),
+            snapshot: ScreenSnapshot::from_text_lines(5000, 5, &[&line]),
+        };
+        append_delta_record(
+            cli.replay.as_deref().unwrap(),
+            &record,
+            previous.as_ref(),
+            120,
+        )
+        .unwrap();
+        previous = Some(record.snapshot);
+    }
+    compact_active_log(cli.replay.as_deref().unwrap(), 8).unwrap();
+
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+
+    assert!(app.replay_deferred_path.is_some());
+    assert!(!app.replay_loading);
+
+    app.follow_latest = false;
+    app.selected_index = *app.filtered.last().unwrap();
+    app.move_down();
+
+    assert!(app.replay_deferred_path.is_none());
+    assert!(app.replay_loading);
+    assert_eq!(
+        app.ui.status_message.as_deref(),
+        Some("loading older replay history in background")
+    );
+
+    let _ = fs::remove_file(&path);
+    remove_spill_files(&path);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn deferred_replay_loader_reconnects_to_runtime_event_channel() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-replay-deferred-forward");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    let mut previous = None;
+    for index in 0..160u64 {
+        let line = noisy_line(index + 1, 4096);
+        let record = LogRecord {
+            label: format!("frame-{index}"),
+            changed: true,
+            timestamp_unix_ms: index + 1,
+            frame_seq: index + 1,
+            width: 20,
+            height: 5,
+            changed_cell_count: 1,
+            input_event_count_since_prev: 0,
+            resized: false,
+            resize_from_width: 0,
+            resize_from_height: 0,
+            resize_to_width: 0,
+            resize_to_height: 0,
+            resize_source: String::new(),
+            snapshot: ScreenSnapshot::from_text_lines(5000, 5, &[&line]),
+        };
+        append_delta_record(
+            cli.replay.as_deref().unwrap(),
+            &record,
+            previous.as_ref(),
+            120,
+        )
+        .unwrap();
+        previous = Some(record.snapshot);
+    }
+    compact_active_log(cli.replay.as_deref().unwrap(), 8).unwrap();
+
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+    let (tx, rx) = mpsc::channel();
+    app.replay_event_tx = Some(tx);
+
+    app.follow_latest = false;
+    app.selected_index = *app.filtered.last().unwrap();
+    app.move_down();
+
+    let replaced = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(matches!(replaced, super::AppEvent::ReplayStateReplaced(_)));
+    let finished = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(matches!(finished, super::AppEvent::ReplayLoadFinished));
+
+    let _ = fs::remove_file(&path);
+    remove_spill_files(&path);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn replay_mode_loads_small_spill_history_immediately() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-replay-small-spill");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    let mut previous = None;
+    for index in 0..40u64 {
+        let line = (0..512usize)
+            .map(|offset| format!("{:08x}", index.saturating_mul(512) + offset as u64))
+            .collect::<Vec<_>>()
+            .join("");
+        let record = LogRecord {
+            label: format!("frame-{index}"),
+            changed: true,
+            timestamp_unix_ms: index + 1,
+            frame_seq: index + 1,
+            width: 20,
+            height: 5,
+            changed_cell_count: 1,
+            input_event_count_since_prev: 0,
+            resized: false,
+            resize_from_width: 0,
+            resize_from_height: 0,
+            resize_to_width: 0,
+            resize_to_height: 0,
+            resize_source: String::new(),
+            snapshot: ScreenSnapshot::from_text_lines(5000, 5, &[&line]),
+        };
+        append_delta_record(
+            cli.replay.as_deref().unwrap(),
+            &record,
+            previous.as_ref(),
+            120,
+        )
+        .unwrap();
+        previous = Some(record.snapshot);
+    }
+    compact_active_log(cli.replay.as_deref().unwrap(), 8).unwrap();
+
+    let app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+
+    assert_eq!(app.current_label(), Some("frame-39"));
+    assert_eq!(app.loaded_frame_count(), 40);
+    assert!(!app.replay_loading);
+    assert_eq!(
+        app.ui.status_message.as_deref(),
+        Some("replay loaded: 40 frames")
+    );
+
+    let _ = fs::remove_file(&path);
+    remove_spill_files(&path);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn replay_replace_state_restores_full_history_after_prefetch() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-replay-replace-state");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    let mut previous = None;
+    for index in 0..40u64 {
+        let line = (0..512usize)
+            .map(|offset| format!("{:08x}", index.saturating_mul(512) + offset as u64))
+            .collect::<Vec<_>>()
+            .join("");
+        let record = LogRecord {
+            label: format!("frame-{index}"),
+            changed: true,
+            timestamp_unix_ms: index + 1,
+            frame_seq: index + 1,
+            width: 20,
+            height: 5,
+            changed_cell_count: 1,
+            input_event_count_since_prev: 0,
+            resized: false,
+            resize_from_width: 0,
+            resize_from_height: 0,
+            resize_to_width: 0,
+            resize_to_height: 0,
+            resize_source: String::new(),
+            snapshot: ScreenSnapshot::from_text_lines(5000, 5, &[&line]),
+        };
+        append_delta_record(
+            cli.replay.as_deref().unwrap(),
+            &record,
+            previous.as_ref(),
+            120,
+        )
+        .unwrap();
+        previous = Some(record.snapshot);
+    }
+    compact_active_log(cli.replay.as_deref().unwrap(), 8).unwrap();
+
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+    assert!(app.loaded_frame_count() <= 40);
+
+    let state = build_replay_replace_state(
+        cli.replay.as_deref().unwrap(),
+        app.checkpoint_interval,
+        app.compress,
+    )
+    .unwrap();
+    app.replace_loaded_replay_state(state).unwrap();
+
+    assert_eq!(app.loaded_frame_count(), 40);
+    assert_eq!(app.current_label(), Some("frame-39"));
+
+    let _ = fs::remove_file(&path);
+    remove_spill_files(&path);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn save_snapshot_uses_configured_directory_and_format() {
     let mut cli = test_cli();
     let dir = unique_temp_dir("twatch-shot-test");
@@ -1424,6 +1815,27 @@ fn cycle_screenshot_format_toggles_and_updates_status() {
 
     app.cycle_screenshot_format();
     assert_eq!(app.screenshot_format.label(), "text");
+}
+
+#[test]
+fn shift_h_toggles_header_visibility() {
+    let mut app = App::new(
+        &test_cli(),
+        Box::new(MockSource::new(vec![frame("a", &["one"])])),
+    )
+    .unwrap();
+
+    assert!(!app.hide_header);
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('H'), KeyModifiers::SHIFT))
+        .unwrap();
+    assert!(app.hide_header);
+    assert_eq!(app.ui.status_message.as_deref(), Some("header hidden"));
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('H'), KeyModifiers::SHIFT))
+        .unwrap();
+    assert!(!app.hide_header);
+    assert_eq!(app.ui.status_message.as_deref(), Some("header shown"));
 }
 
 #[test]
@@ -1563,6 +1975,12 @@ fn test_cli() -> Cli {
         compress: false,
         logfile: None,
         replay: None,
+        pack_logfile: None,
+        pack_output: None,
+        record_stdin: false,
+        record_stdin_spill_every: 64,
+        record_stdin_spill_retain: 32,
+        size: None,
         screenshot_dir: "/tmp".to_string(),
         screenshot_format: ScreenshotFormatArg::Text,
         snapshot_on: None,
@@ -1574,6 +1992,7 @@ fn test_cli() -> Cli {
         limit: 500,
         checkpoint_interval: 12,
         debug: false,
+        hide_header: false,
         command: vec!["mock".to_string()],
     }
 }
@@ -1604,4 +2023,22 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!("{prefix}-{id}"))
+}
+
+fn remove_spill_files(path: &PathBuf) {
+    for spill in active_spill_paths(path.to_string_lossy().as_ref()) {
+        let _ = fs::remove_file(spill);
+    }
+}
+
+fn noisy_line(seed: u64, words: usize) -> String {
+    let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    let mut line = String::with_capacity(words * 8);
+    for _ in 0..words {
+        state ^= state << 7;
+        state ^= state >> 9;
+        state ^= state << 8;
+        line.push_str(&format!("{:08x}", (state & 0xffff_ffff) as u32));
+    }
+    line
 }

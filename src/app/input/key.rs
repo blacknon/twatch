@@ -112,6 +112,7 @@ impl App {
                 }
             }
             (KeyCode::Char('h'), _) => self.ui.show_help = true,
+            (KeyCode::Char('H'), _) => self.toggle_header_visibility(),
             (KeyCode::Char('I'), _) => {
                 self.ui.show_inspector = !self.ui.show_inspector;
                 self.clamp_inspector_to_snapshot();

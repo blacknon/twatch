@@ -3,10 +3,15 @@
 // that can be found in the LICENSE file.
 
 use anyhow::Result;
+use std::path::Path;
 
-use super::{App, FocusPane};
+use super::{App, AppHistoryMetadata, FocusPane, ReplayReplaceState};
 use crate::history::{HistoryMetadata, HistoryStore};
-use crate::logging::{LogRecord, append_record, load_records};
+use crate::logging::{
+    LogRecord, LogRecordStream, append_delta_record, load_recent_records_from_cache,
+    load_recent_records_from_plain_path, load_recent_records_from_single_path, load_records,
+    load_records_from_single_path, replay_path_info,
+};
 
 impl App {
     pub(super) fn delete_selected_history(&mut self) -> Result<()> {
@@ -68,6 +73,9 @@ impl App {
     }
 
     pub(super) fn trim_history(&mut self) -> Result<()> {
+        if self.limit == 0 {
+            return Ok(());
+        }
         let total = self.history.len();
         if total <= self.limit {
             return Ok(());
@@ -107,7 +115,193 @@ impl App {
             return Ok(());
         };
 
-        for record in load_records(path)? {
+        self.apply_loaded_records(load_records(path)?)?;
+
+        Ok(())
+    }
+
+    pub(super) fn load_history_from_replay_log_prefetch(&mut self) -> Result<()> {
+        let Some(path) = self.logfile.clone() else {
+            return Ok(());
+        };
+        if !Path::new(&path).exists() {
+            return Ok(());
+        }
+
+        let replay_info = replay_path_info(&path)?;
+        let replay_uses_manifest = path.ends_with(".replay.json");
+
+        if !replay_info.spill_paths.is_empty() {
+            let latest_spill_records = replay_info
+                .spill_paths
+                .last()
+                .filter(|spill_path| {
+                    std::fs::metadata(spill_path)
+                        .ok()
+                        .map(|meta| meta.len() <= super::state::REPLAY_SYNC_LATEST_SPILL_MAX_BYTES)
+                        .unwrap_or(false)
+                })
+                .map(|spill_path| load_records_from_single_path(spill_path))
+                .transpose()?
+                .unwrap_or_default();
+            let cached = load_recent_records_from_cache(
+                &path,
+                super::state::replay_prefetch_record_count(),
+            )?;
+            if !cached.is_empty() {
+                let mut loaded = latest_spill_records;
+                loaded.extend(cached);
+                self.apply_loaded_records(loaded)?;
+                if replay_uses_manifest {
+                    self.replay_reload_path = Some(path);
+                    self.replay_loading = true;
+                    self.ui.status_message = Some(format!(
+                        "replay loading recent cache: {} history frames ready, older history loading in background",
+                        self.metadata.len()
+                    ));
+                } else {
+                    self.replay_deferred_path = Some(path);
+                    self.replay_loading = false;
+                    self.ui.status_message = Some(format!(
+                        "replay loaded recent cache: {} history frames ready, load older history on demand",
+                        self.metadata.len()
+                    ));
+                }
+                return Ok(());
+            }
+
+            let total_spill_size_bytes: u64 = replay_info
+                .spill_paths
+                .iter()
+                .filter_map(|spill_path| std::fs::metadata(spill_path).ok().map(|meta| meta.len()))
+                .sum();
+            if total_spill_size_bytes <= super::state::REPLAY_SYNC_SMALL_SPILL_MAX_BYTES {
+                self.apply_loaded_records(load_records(&path)?)?;
+                self.ui.status_message = Some(format!(
+                    "replay loaded: {} frames",
+                    self.loaded_frame_count()
+                ));
+                return Ok(());
+            }
+            let loaded = load_recent_records_from_single_path(
+                &path,
+                super::state::replay_prefetch_record_count(),
+            )?;
+            let mut prefetched = latest_spill_records;
+            prefetched.extend(loaded);
+            self.apply_loaded_records(prefetched)?;
+            if replay_uses_manifest {
+                self.replay_reload_path = Some(path);
+                self.replay_loading = true;
+                self.ui.status_message = Some(format!(
+                    "replay loading recent tail: {} history frames ready, older history loading in background",
+                    self.metadata.len()
+                ));
+            } else {
+                self.replay_deferred_path = Some(path);
+                self.replay_loading = false;
+                self.ui.status_message = Some(format!(
+                    "replay loaded recent tail: {} history frames ready, load older history on demand",
+                    self.metadata.len()
+                ));
+            }
+            return Ok(());
+        }
+
+        if path.ends_with(".jsonl") {
+            let loaded = load_recent_records_from_plain_path(
+                &path,
+                super::state::replay_prefetch_record_count(),
+            )?;
+            if !loaded.is_empty() {
+                self.apply_loaded_records(loaded)?;
+                self.replay_reload_path = Some(path);
+                self.replay_loading = true;
+                self.ui.status_message = Some(format!(
+                    "replay loading recent tail: {} history frames ready, older history loading in background",
+                    self.metadata.len()
+                ));
+                return Ok(());
+            }
+        }
+
+        let mut stream = LogRecordStream::open(&path)?;
+        let mut loaded = Vec::new();
+
+        while loaded.len() < super::state::replay_prefetch_record_count() {
+            let Some(record) = stream.next_record()? else {
+                break;
+            };
+            loaded.push(record);
+        }
+
+        self.apply_loaded_records(loaded)?;
+
+        if stream.has_more()? {
+            self.replay_loader = Some(stream);
+            self.replay_loading = true;
+            self.ui.status_message = Some(format!(
+                "replay loading: {} history frames ready, more loading in background",
+                self.metadata.len()
+            ));
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn replace_loaded_replay_state(&mut self, state: ReplayReplaceState) -> Result<()> {
+        let preserve_follow_latest = self.follow_latest;
+        let preserve_frame_seq = if self.follow_latest {
+            self.current_metadata
+                .as_ref()
+                .map(|metadata| metadata.frame_seq)
+        } else {
+            self.metadata
+                .get(self.selected_index)
+                .map(|metadata| metadata.frame_seq)
+        };
+
+        self.history = state.history;
+        self.metadata = state.metadata;
+        self.current_snapshot = state.current_snapshot;
+        self.current_metadata = state.current_metadata;
+        self.filtered.clear();
+        self.selected_index = 0;
+        self.follow_latest = preserve_follow_latest;
+        self.invalidate_view_cache();
+
+        if self.limit > 0 && self.metadata.len() > self.limit {
+            self.trim_history()?;
+        }
+
+        if self.current_snapshot.is_some() {
+            if preserve_follow_latest {
+                self.selected_index = self.history.len().saturating_sub(1);
+                self.follow_latest = true;
+            }
+            self.rebuild_filter()?;
+        }
+
+        if !preserve_follow_latest {
+            if let Some(frame_seq) = preserve_frame_seq
+                && let Some(index) = self
+                    .metadata
+                    .iter()
+                    .position(|metadata| metadata.frame_seq == frame_seq)
+            {
+                self.follow_latest = false;
+                self.selected_index = index;
+                self.rebuild_filter()?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub(super) fn apply_loaded_records(&mut self, records: Vec<LogRecord>) -> Result<()> {
+        let was_follow_latest = self.follow_latest;
+
+        for record in records {
             let (snapshot, metadata, changed) = record.into_parts();
             self.archive_current_snapshot()?;
             let metadata = self.complete_metadata(
@@ -120,17 +314,23 @@ impl App {
             self.set_current_snapshot(snapshot, metadata);
         }
 
-        if self.metadata.len() > self.limit {
+        if self.limit > 0 && self.metadata.len() > self.limit {
             self.trim_history()?;
         }
 
         if self.current_snapshot.is_some() {
-            self.selected_index = self.history.len().saturating_sub(1);
-            self.follow_latest = true;
+            if was_follow_latest {
+                self.selected_index = self.history.len().saturating_sub(1);
+                self.follow_latest = true;
+            }
             self.rebuild_filter()?;
         }
 
         Ok(())
+    }
+
+    pub(super) fn loaded_frame_count(&self) -> usize {
+        self.metadata.len() + usize::from(self.current_snapshot.is_some())
     }
 
     pub(super) fn append_log_record(&self) -> Result<()> {
@@ -147,7 +347,13 @@ impl App {
             return Ok(());
         };
 
-        append_record(
+        let previous_snapshot = if self.history.is_empty() {
+            None
+        } else {
+            self.history.snapshot(self.history.len() - 1)?
+        };
+
+        append_delta_record(
             path,
             &LogRecord {
                 label: metadata.label.clone(),
@@ -166,6 +372,44 @@ impl App {
                 resize_source: metadata.resize_source.clone(),
                 snapshot: snapshot.clone(),
             },
+            previous_snapshot.as_ref(),
+            self.checkpoint_interval as u64,
         )
     }
+}
+
+pub(super) fn build_replay_replace_state(
+    path: &str,
+    checkpoint_interval: usize,
+    compress: bool,
+) -> Result<ReplayReplaceState> {
+    let mut loader = LogRecordStream::open(path)?;
+    let mut history = HistoryStore::new(checkpoint_interval, compress);
+    let mut metadata = Vec::new();
+    let mut current_snapshot = None;
+    let mut current_metadata: Option<AppHistoryMetadata> = None;
+
+    while let Some(record) = loader.next_record()? {
+        let (snapshot, record_metadata, changed) = record.into_parts();
+
+        if let (Some(previous_snapshot), Some(previous_metadata)) =
+            (current_snapshot.take(), current_metadata.take())
+        {
+            history.push(previous_snapshot, previous_metadata.to_history_metadata())?;
+            metadata.push(previous_metadata);
+        }
+
+        current_snapshot = Some(snapshot);
+        current_metadata = Some(AppHistoryMetadata::from_history_metadata(HistoryMetadata {
+            changed,
+            ..record_metadata
+        }));
+    }
+
+    Ok(ReplayReplaceState {
+        history,
+        metadata,
+        current_snapshot,
+        current_metadata,
+    })
 }

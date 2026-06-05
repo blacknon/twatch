@@ -75,7 +75,7 @@ pub fn render_ansi_text(snapshot: &ScreenSnapshot, header_lines: &[impl AsRef<st
         let mut current = Style::default();
 
         for x in 0..end {
-            let cell = snapshot.cell(x, y).cloned().unwrap_or_else(Cell::blank);
+            let cell = snapshot.cell(x, y).unwrap_or_else(Cell::blank);
             let next_style = normalized_style(cell.style);
             if next_style != current {
                 out.push_str(&style_to_sgr(next_style, current));
@@ -85,7 +85,7 @@ pub fn render_ansi_text(snapshot: &ScreenSnapshot, header_lines: &[impl AsRef<st
             if cell.symbol.is_empty() {
                 out.push(' ');
             } else {
-                out.push_str(&cell.symbol);
+                out.push_str(cell.symbol.as_str());
             }
         }
 
@@ -188,7 +188,7 @@ fn render_svg(snapshot: &ScreenSnapshot) -> String {
                 ));
             }
 
-            if !cell.symbol.trim().is_empty() {
+            if !cell.symbol.as_str().trim().is_empty() {
                 let fg = term_color_to_css(cell.style.fg, "#d0d0d0");
                 let font_weight = if cell.style.bold {
                     " font-weight=\"bold\""
@@ -213,7 +213,7 @@ fn render_svg(snapshot: &ScreenSnapshot) -> String {
                     font_weight,
                     font_style,
                     text_decoration,
-                    escape_xml(&cell.symbol),
+                    escape_xml(cell.symbol.as_str()),
                 ));
             }
         }
@@ -265,7 +265,7 @@ fn escape_xml(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{ScreenshotFormat, render_ansi_text, render_svg};
-    use crate::screen::{Cell, ScreenSnapshot, Style, TermColor};
+    use crate::screen::{Cell, ScreenSnapshot, Style, Symbol, TermColor};
 
     #[test]
     fn cycles_formats() {
@@ -289,7 +289,7 @@ mod tests {
             0,
             0,
             Cell {
-                symbol: "A".to_string(),
+                symbol: Symbol::from('A'),
                 style: Style {
                     fg: TermColor::Indexed(2),
                     bg: TermColor::Default,

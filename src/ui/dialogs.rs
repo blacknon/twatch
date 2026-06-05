@@ -13,7 +13,20 @@ use super::{BORDER_ACTIVE, PANEL_BG};
 pub(super) fn draw_help(frame: &mut Frame<'_>, area: Rect) {
     let area = centered_rect(68, 60, area);
     frame.render_widget(Clear, area);
-    let lines = vec![
+    let lines = help_lines();
+    let help = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .title(" Help ")
+                .borders(Borders::ALL)
+                .style(Style::default().bg(PANEL_BG)),
+        )
+        .style(Style::default().fg(Color::White).bg(PANEL_BG));
+    frame.render_widget(help, area);
+}
+
+fn help_lines() -> Vec<Line<'static>> {
+    vec![
         Line::from("twatch keys"),
         Line::from(""),
         Line::from("q             quit"),
@@ -27,6 +40,7 @@ pub(super) fn draw_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("--keymap      remap twatch actions"),
         Line::from("--bind        override child TUI keys"),
         Line::from("Backspace     toggle history pane"),
+        Line::from("Shift+H       toggle header"),
         Line::from("/             search history"),
         Line::from("*             regex filter history"),
         Line::from("D             delete selected history"),
@@ -38,16 +52,7 @@ pub(super) fn draw_help(frame: &mut Frame<'_>, area: Rect) {
         Line::from("p             pause twatch capture"),
         Line::from("Shift+P       pause child process"),
         Line::from("Alt+Left/Right horizontal scroll"),
-    ];
-    let help = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .title(" Help ")
-                .borders(Borders::ALL)
-                .style(Style::default().bg(PANEL_BG)),
-        )
-        .style(Style::default().fg(Color::White).bg(PANEL_BG));
-    frame.render_widget(help, area);
+    ]
 }
 
 pub(super) fn draw_exit_confirm(frame: &mut Frame<'_>, area: Rect) {
@@ -89,4 +94,18 @@ pub(super) fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect 
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::help_lines;
+
+    #[test]
+    fn help_lists_toggle_header_shortcut() {
+        let rendered: Vec<String> = help_lines()
+            .into_iter()
+            .map(|line| line.to_string())
+            .collect();
+        assert!(rendered.iter().any(|line| line.contains("Shift+H")));
+    }
 }

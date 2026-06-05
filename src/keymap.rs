@@ -48,6 +48,7 @@ pub(crate) enum KeyAction {
     EnterAppInputMode,
     LeaveAppInputMode,
     ToggleInspector,
+    ToggleHeader,
     SaveSnapshot,
     CycleSnapshotFormat,
     ScrollLeft,
@@ -115,6 +116,7 @@ fn parse_key_action(value: &str) -> Result<KeyAction> {
         "enter_app_input_mode" => KeyAction::EnterAppInputMode,
         "leave_app_input_mode" => KeyAction::LeaveAppInputMode,
         "toggle_inspector" => KeyAction::ToggleInspector,
+        "toggle_header" => KeyAction::ToggleHeader,
         "save_snapshot" => KeyAction::SaveSnapshot,
         "cycle_snapshot_format" => KeyAction::CycleSnapshotFormat,
         "scroll_left" => KeyAction::ScrollLeft,
@@ -134,5 +136,12 @@ mod tests {
         assert_eq!(bindings.len(), 2);
         assert_eq!(bindings[0].action, KeyAction::HistoryPaneUp);
         assert_eq!(bindings[1].action, KeyAction::Quit);
+    }
+
+    #[test]
+    fn parses_toggle_header_keymap_action() {
+        let bindings = compile_keymap(&["shift-h=toggle_header".to_string()]).unwrap();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].action, KeyAction::ToggleHeader);
     }
 }

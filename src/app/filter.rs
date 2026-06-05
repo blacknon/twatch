@@ -53,7 +53,7 @@ impl App {
         }
     }
 
-    fn current_snapshot_matches_filter(&self) -> bool {
+    pub(super) fn current_snapshot_matches_filter(&self) -> bool {
         let Some(snapshot) = &self.current_snapshot else {
             return false;
         };

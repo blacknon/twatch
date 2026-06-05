@@ -29,6 +29,10 @@ impl App {
             }
         });
 
+        self.replay_event_tx = Some(tx.clone());
+        self.start_replay_loader();
+        self.attach_replay_loader_forwarder();
+
         if let Some(update_rx) = self.source.take_update_receiver() {
             let update_tx = tx.clone();
             let pending_source_update = Arc::new(AtomicBool::new(false));
@@ -70,14 +74,15 @@ impl App {
 
     fn capture_terminal_size(&mut self, terminal: &DefaultTerminal) -> Result<()> {
         let size = terminal.size()?;
-        self.capture(size.width, size.height.saturating_sub(2))
+        self.capture(size.width, self.content_height(size.height))
     }
 
     fn resize_and_capture(&mut self, width: u16, height: u16) -> Result<()> {
-        self.note_resize_event(width, height.saturating_sub(2), "terminal");
-        self.source.resize(width, height.saturating_sub(2))?;
+        let content_height = self.content_height(height);
+        self.note_resize_event(width, content_height, "terminal");
+        self.source.resize(width, content_height)?;
         if !self.paused {
-            self.capture(width, height.saturating_sub(2))?;
+            self.capture(width, content_height)?;
         }
         Ok(())
     }
@@ -90,7 +95,7 @@ impl App {
     ) -> Result<()> {
         if self.current_snapshot.is_none() {
             let size = terminal.size()?;
-            if let Err(err) = self.capture(size.width, size.height.saturating_sub(2)) {
+            if let Err(err) = self.capture(size.width, self.content_height(size.height)) {
                 if self.is_source_closed_error(&err) {
                     self.source.terminate().ok();
                     return Ok(());
@@ -139,6 +144,27 @@ impl App {
                         }
                         break;
                     }
+                    Ok(AppEvent::ReplayRecordsLoaded(records)) => {
+                        self.apply_loaded_records(records)?;
+                        needs_redraw = true;
+                    }
+                    Ok(AppEvent::ReplayStateReplaced(state)) => {
+                        self.replace_loaded_replay_state(state)?;
+                        needs_redraw = true;
+                    }
+                    Ok(AppEvent::ReplayLoadFinished) => {
+                        self.replay_loading = false;
+                        self.ui.status_message = Some(format!(
+                            "replay loaded: {} frames",
+                            self.loaded_frame_count()
+                        ));
+                        needs_redraw = true;
+                    }
+                    Ok(AppEvent::ReplayLoadFailed(err)) => {
+                        self.replay_loading = false;
+                        self.ui.status_message = Some(format!("replay load failed: {err}"));
+                        needs_redraw = true;
+                    }
                     Err(RecvTimeoutError::Timeout) => {
                         if !self.paused && self.source.has_pending_update() {
                             if let Some(flag) = &pending_source_update {
@@ -159,6 +185,27 @@ impl App {
                         LoopControl::Break => break,
                     },
                     Ok(AppEvent::SourceUpdated) | Ok(AppEvent::SourceClosed(_)) => {}
+                    Ok(AppEvent::ReplayRecordsLoaded(records)) => {
+                        self.apply_loaded_records(records)?;
+                        needs_redraw = true;
+                    }
+                    Ok(AppEvent::ReplayStateReplaced(state)) => {
+                        self.replace_loaded_replay_state(state)?;
+                        needs_redraw = true;
+                    }
+                    Ok(AppEvent::ReplayLoadFinished) => {
+                        self.replay_loading = false;
+                        self.ui.status_message = Some(format!(
+                            "replay loaded: {} frames",
+                            self.loaded_frame_count()
+                        ));
+                        needs_redraw = true;
+                    }
+                    Ok(AppEvent::ReplayLoadFailed(err)) => {
+                        self.replay_loading = false;
+                        self.ui.status_message = Some(format!("replay load failed: {err}"));
+                        needs_redraw = true;
+                    }
                     Err(RecvTimeoutError::Timeout) => {}
                     Err(RecvTimeoutError::Disconnected) => break,
                 }

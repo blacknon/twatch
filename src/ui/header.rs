@@ -107,8 +107,8 @@ pub(super) fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect)
 
     let hist_label = format!(
         "Hist {}/{} {} {}",
-        format!("{:05}", app.filtered_indices().len()),
-        format!("{:05}", app.visible_history_len()),
+        format!("{:05}", app.display_filtered_history_len()),
+        format!("{:05}", app.display_history_len()),
         if app.ui.show_history { "Open" } else { "Close" },
         if app.follow_latest { "Latest" } else { "Hold" }
     );

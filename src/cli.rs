@@ -96,6 +96,43 @@ pub struct Cli {
     #[arg(long, help = "Replay a saved JSONL trace in read-only mode")]
     pub replay: Option<String>,
 
+    #[arg(
+        long,
+        hide = true,
+        help = "Pack a saved log into compact archive format"
+    )]
+    pub pack_logfile: Option<String>,
+
+    #[arg(long, hide = true, help = "Write compact archive output to this path")]
+    pub pack_output: Option<String>,
+
+    #[arg(
+        long,
+        help = "Record terminal output from stdin without spawning a child PTY"
+    )]
+    pub record_stdin: bool,
+
+    #[arg(
+        long,
+        default_value_t = 64,
+        help = "During stdin recording, spill older active log frames into a sidecar every N frames; use 0 to disable"
+    )]
+    pub record_stdin_spill_every: usize,
+
+    #[arg(
+        long,
+        default_value_t = 32,
+        help = "During stdin recording, keep this many recent frames in the active JSONL before spilling older ones"
+    )]
+    pub record_stdin_spill_retain: usize,
+
+    #[arg(
+        long,
+        value_name = "WIDTH,HEIGHT",
+        help = "Use a fixed terminal size for stdin recording"
+    )]
+    pub size: Option<SizeSpec>,
+
     #[arg(long, default_value = "/tmp")]
     pub screenshot_dir: String,
 
@@ -135,11 +172,14 @@ pub struct Cli {
     #[arg(short = 'L', long, default_value_t = 500)]
     pub limit: usize,
 
-    #[arg(long, default_value_t = 12)]
+    #[arg(long, default_value_t = 120)]
     pub checkpoint_interval: usize,
 
     #[arg(long, help = "Show debug diagnostics in the interactive UI")]
     pub debug: bool,
+
+    #[arg(long, help = "Hide the two-line interactive header")]
+    pub hide_header: bool,
 
     #[arg()]
     pub command: Vec<String>,
@@ -263,8 +303,8 @@ impl fmt::Display for CropSpec {
 
 #[cfg(test)]
 mod tests {
-    use super::{CropSpec, DiffModeArg, SizeSpec, default_shell};
-    use clap::ValueEnum;
+    use super::{Cli, CropSpec, DiffModeArg, SizeSpec, default_shell};
+    use clap::{Parser, ValueEnum};
 
     #[test]
     fn parses_size_spec() {
@@ -306,5 +346,27 @@ mod tests {
 
         #[cfg(not(windows))]
         assert_eq!(default_shell(), "sh -c");
+    }
+
+    #[test]
+    fn parses_record_stdin_size() {
+        let cli = Cli::parse_from(["twatch", "--record-stdin", "--size", "120,40"]);
+        assert!(cli.record_stdin);
+        assert_eq!(
+            cli.size,
+            Some(SizeSpec {
+                width: 120,
+                height: 40,
+            })
+        );
+        assert_eq!(cli.record_stdin_spill_every, 64);
+        assert_eq!(cli.record_stdin_spill_retain, 32);
+    }
+
+    #[test]
+    fn parses_hide_header_flag() {
+        let cli = Cli::parse_from(["twatch", "--hide-header", "--replay", "trace.jsonl"]);
+        assert!(cli.hide_header);
+        assert_eq!(cli.replay.as_deref(), Some("trace.jsonl"));
     }
 }

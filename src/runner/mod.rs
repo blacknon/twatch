@@ -9,13 +9,18 @@ use anyhow::{Context, Result};
 use crossterm::event::{KeyEvent, MouseEvent};
 use time::{OffsetDateTime, format_description::FormatItem, macros::format_description};
 
-use crate::logging::load_records;
+use crate::logging::{
+    load_recent_records_from_cache, load_recent_records_from_plain_path,
+    load_recent_records_from_single_path, load_records, replay_path_info,
+};
 use crate::screen::ScreenSnapshot;
 
 mod capture_hook;
 mod encode;
+mod pipe;
 mod pty;
 
+pub use pipe::PipeRunner;
 pub use pty::PtyRunner;
 
 const TIME_FORMAT: &[FormatItem<'static>] =
@@ -89,11 +94,7 @@ impl DemoRunner {
 
 impl ReplayRunner {
     pub fn from_log(path: &str) -> Result<Self> {
-        let records = load_records(path)?;
-        let record = records
-            .last()
-            .cloned()
-            .context("replay log does not contain any frames")?;
+        let record = latest_replay_record(path)?;
         Ok(Self {
             frame: CaptureFrame {
                 label: record.label,
@@ -104,6 +105,33 @@ impl ReplayRunner {
             },
         })
     }
+}
+
+fn latest_replay_record(path: &str) -> Result<crate::logging::LogRecord> {
+    if let Ok(cached) = load_recent_records_from_cache(path, 1)
+        && let Some(record) = cached.into_iter().last()
+    {
+        return Ok(record);
+    }
+
+    let replay_info = replay_path_info(path)?;
+    if replay_info.current_log.ends_with(".jsonl") {
+        let recent = load_recent_records_from_plain_path(&replay_info.current_log, 1)?;
+        if let Some(record) = recent.into_iter().last() {
+            return Ok(record);
+        }
+    }
+
+    let recent = load_recent_records_from_single_path(&replay_info.current_log, 1)?;
+    if let Some(record) = recent.into_iter().last() {
+        return Ok(record);
+    }
+
+    let records = load_records(path)?;
+    records
+        .last()
+        .cloned()
+        .context("replay log does not contain any frames")
 }
 
 impl FrameSource for DemoRunner {
@@ -221,7 +249,9 @@ pub(crate) fn unix_timestamp_millis() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{DemoRunner, FrameSource, ReplayRunner};
+    use std::io::Cursor;
+
+    use super::{DemoRunner, FrameSource, PipeRunner, ReplayRunner};
     use crate::logging::{LogRecord, append_record};
     use crate::runner::capture_hook::parse_shell;
     use crate::screen::ScreenSnapshot;
@@ -302,6 +332,61 @@ mod tests {
     }
 
     #[test]
+    fn replay_runner_reads_latest_frame_from_manifest_current_log() {
+        let path = std::env::temp_dir().join(format!(
+            "twatch-replay-runner-manifest-{}.mjl",
+            std::process::id()
+        ));
+        let manifest = format!("{}.replay.json", path.to_string_lossy());
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&manifest);
+
+        for (index, line) in ["one", "two"].into_iter().enumerate() {
+            append_record(
+                path.to_string_lossy().as_ref(),
+                &LogRecord {
+                    label: char::from(b'a' + index as u8).to_string(),
+                    changed: true,
+                    timestamp_unix_ms: index as u64 + 1,
+                    frame_seq: index as u64 + 1,
+                    width: 20,
+                    height: 5,
+                    changed_cell_count: 1,
+                    input_event_count_since_prev: 0,
+                    resized: false,
+                    resize_from_width: 0,
+                    resize_from_height: 0,
+                    resize_to_width: 0,
+                    resize_to_height: 0,
+                    resize_source: String::new(),
+                    snapshot: ScreenSnapshot::from_text_lines(20, 5, &[line]),
+                },
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            &manifest,
+            serde_json::to_vec(&serde_json::json!({
+                "version": 1,
+                "current_log": path.to_string_lossy(),
+                "recent_cache": serde_json::Value::Null,
+                "spill_paths": [],
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut runner = ReplayRunner::from_log(&manifest).unwrap();
+        let frame = FrameSource::capture(&mut runner, 20, 5).unwrap();
+
+        assert_eq!(frame.label, "b");
+        assert_eq!(frame.raw_output, "two\n\n\n\n");
+
+        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(manifest);
+    }
+
+    #[test]
     fn non_pty_sources_do_not_support_child_pause() {
         let mut demo = DemoRunner::new();
         assert!(!demo.supports_child_pause());
@@ -318,5 +403,23 @@ mod tests {
         };
         assert!(!replay.supports_child_pause());
         assert!(replay.toggle_child_pause().unwrap().is_none());
+    }
+
+    #[test]
+    fn pipe_runner_captures_terminal_stream() {
+        let reader = Cursor::new(b"hello\r\nworld".to_vec());
+        let mut runner = PipeRunner::from_reader(Box::new(reader), 20, 5);
+        let update_rx = runner.take_update_receiver().unwrap();
+
+        while let Ok(event) = update_rx.recv() {
+            if matches!(event, super::SourceEvent::Closed) {
+                break;
+            }
+        }
+
+        let frame = FrameSource::capture(&mut runner, 20, 5).unwrap();
+        assert!(frame.raw_output.starts_with("hello"));
+        assert!(frame.raw_output.contains("world"));
+        assert!(frame.changed);
     }
 }

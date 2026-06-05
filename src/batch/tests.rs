@@ -82,6 +82,12 @@ fn test_cli() -> Cli {
         compress: false,
         logfile: None,
         replay: None,
+        pack_logfile: None,
+        pack_output: None,
+        record_stdin: false,
+        record_stdin_spill_every: 64,
+        record_stdin_spill_retain: 32,
+        size: None,
         screenshot_dir: "/tmp".to_string(),
         screenshot_format: ScreenshotFormatArg::Text,
         snapshot_on: None,
@@ -93,6 +99,7 @@ fn test_cli() -> Cli {
         limit: 500,
         checkpoint_interval: 12,
         debug: false,
+        hide_header: false,
         command: vec!["mock".to_string()],
     }
 }

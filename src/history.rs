@@ -9,10 +9,13 @@ use flate2::Compression;
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use regex::Regex;
+use rmp_serde::{from_slice as rmp_from_slice, to_vec as rmp_to_vec};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::diff::{LineDiff, WordDiff, diff_lines, diff_words};
-use crate::screen::{Cell, ScreenSnapshot};
+use crate::screen::{DeltaCell, ScreenSnapshot, Style};
+
+const RECENT_RAW_HISTORY_ENTRIES: usize = 256;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -49,7 +52,8 @@ struct HistoryEntry {
 struct FrameDelta {
     width: u16,
     height: u16,
-    changes: Vec<(usize, Cell)>,
+    changes: Vec<(usize, DeltaCell)>,
+    styles: Vec<Style>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -126,6 +130,7 @@ impl HistoryStore {
 
         self.entries.push(entry);
         self.last_snapshot = Some(snapshot);
+        self.compress_cold_entries()?;
         Ok(())
     }
 
@@ -254,11 +259,30 @@ impl HistoryStore {
                 .is_some_and(|entry| matches!(entry.kind, HistoryEntryKind::Checkpoint(_)))
         })
     }
+
+    fn compress_cold_entries(&mut self) -> Result<()> {
+        if self.compress || self.entries.len() <= RECENT_RAW_HISTORY_ENTRIES {
+            return Ok(());
+        }
+
+        let cold_index = self.entries.len() - RECENT_RAW_HISTORY_ENTRIES - 1;
+        let Some(entry) = self.entries.get_mut(cold_index) else {
+            return Ok(());
+        };
+
+        match &mut entry.kind {
+            HistoryEntryKind::Checkpoint(payload) => compress_payload_in_place(payload)?,
+            HistoryEntryKind::Delta(payload) => compress_payload_in_place(payload)?,
+        }
+
+        Ok(())
+    }
 }
 
 impl FrameDelta {
     fn between(before: &ScreenSnapshot, after: &ScreenSnapshot) -> Self {
         let mut changes = Vec::new();
+        let mut styles = vec![Style::default()];
 
         let after_width = after.width();
         let after_height = after.height();
@@ -268,11 +292,23 @@ impl FrameDelta {
         for y in 0..max_height {
             for x in 0..max_width {
                 let idx = usize::from(y) * usize::from(after_width.max(1)) + usize::from(x);
-                let before_cell = before.cell(x, y).cloned().unwrap_or_default();
-                let after_cell = after.cell(x, y).cloned().unwrap_or_default();
+                let before_cell = before.cell(x, y).unwrap_or_default();
+                let after_cell = after.cell(x, y).unwrap_or_default();
 
                 if before_cell != after_cell && x < after_width && y < after_height {
-                    changes.push((idx, after_cell));
+                    let mut delta_cell = after
+                        .delta_cell(x, y)
+                        .expect("delta cell must exist within bounds");
+                    let style = after_cell.style;
+                    delta_cell.style_id = styles
+                        .iter()
+                        .position(|item| *item == style)
+                        .map(|index| index as u32)
+                        .unwrap_or_else(|| {
+                            styles.push(style);
+                            (styles.len() - 1) as u32
+                        });
+                    changes.push((idx, delta_cell));
                 }
             }
         }
@@ -281,12 +317,13 @@ impl FrameDelta {
             width: after_width,
             height: after_height,
             changes,
+            styles,
         }
     }
 
     fn apply(&self, snapshot: &mut ScreenSnapshot) {
         snapshot.resize(self.width, self.height);
-        snapshot.apply_changes(&self.changes);
+        snapshot.apply_delta_changes(&self.changes, &self.styles);
     }
 }
 
@@ -297,10 +334,8 @@ fn store_checkpoint(
     store_payload(value, compress)
 }
 
-fn store_delta(value: FrameDelta, _compress: bool) -> Result<StoredPayload<FrameDelta>> {
-    // Deltas are already sparse, so compressing each one tends to waste CPU
-    // more than it saves memory. Keep them raw and only compress checkpoints.
-    store_payload(value, false)
+fn store_delta(value: FrameDelta, compress: bool) -> Result<StoredPayload<FrameDelta>> {
+    store_payload(value, compress)
 }
 
 fn store_payload<T>(value: T, compress: bool) -> Result<StoredPayload<T>>
@@ -311,7 +346,7 @@ where
         return Ok(StoredPayload::Raw(value));
     }
 
-    let bytes = serde_json::to_vec(&value).context("failed to serialize history payload")?;
+    let bytes = rmp_to_vec(&value).context("failed to serialize history payload")?;
     let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
     encoder
         .write_all(&bytes)
@@ -321,6 +356,21 @@ where
             .finish()
             .context("failed to finalize history compression")?,
     ))
+}
+
+fn compress_payload_in_place<T>(payload: &mut StoredPayload<T>) -> Result<()>
+where
+    T: Clone + Serialize,
+{
+    if matches!(payload, StoredPayload::Compressed(_)) {
+        return Ok(());
+    }
+
+    let StoredPayload::Raw(value) = payload else {
+        return Ok(());
+    };
+    *payload = store_payload(value.clone(), true)?;
+    Ok(())
 }
 
 fn load_payload<T>(payload: &StoredPayload<T>) -> Result<T>
@@ -335,7 +385,9 @@ where
             decoder
                 .read_to_end(&mut out)
                 .context("failed to decompress history payload")?;
-            serde_json::from_slice(&out).context("failed to deserialize history payload")
+            rmp_from_slice(&out)
+                .or_else(|_| serde_json::from_slice(&out))
+                .context("failed to deserialize history payload")
         }
     }
 }
@@ -343,7 +395,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{HistoryMetadata, HistoryStore};
-    use crate::screen::ScreenSnapshot;
+    use crate::screen::{Cell, ScreenSnapshot, Style, Symbol, TermColor};
 
     #[test]
     fn reconstructs_snapshots_from_checkpoints_and_deltas() {
@@ -406,7 +458,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(history.find_by_query("jobs").unwrap(), vec![0, 1]);
-        assert_eq!(history.stats().compressed_entries, 2);
+        assert_eq!(history.stats().compressed_entries, 3);
     }
 
     #[test]
@@ -453,6 +505,58 @@ mod tests {
         let word_diffs = history.word_diffs(0, 1).unwrap().expect("word diffs");
         assert_eq!(word_diffs[0].removed, vec!["pending".to_string()]);
         assert_eq!(word_diffs[0].added, vec!["running".to_string()]);
+    }
+
+    #[test]
+    fn reconstructs_styled_deltas_with_compact_cells() {
+        let mut history = HistoryStore::new(10, false);
+        let before = ScreenSnapshot::from_text_lines(4, 1, &["ab"]);
+        let mut after = ScreenSnapshot::from_text_lines(4, 1, &["ab"]);
+        after.set_cell(
+            1,
+            0,
+            Cell {
+                symbol: Symbol::from('Z'),
+                style: Style {
+                    fg: TermColor::Indexed(10),
+                    bg: TermColor::Indexed(0),
+                    bold: true,
+                    italic: false,
+                    underline: false,
+                    inverted: false,
+                },
+            },
+        );
+
+        history.push(before, meta("before")).unwrap();
+        history.push(after.clone(), meta("after")).unwrap();
+
+        let restored = history.snapshot(1).unwrap().expect("snapshot");
+        assert_eq!(restored, after);
+    }
+
+    #[test]
+    fn auto_compresses_cold_entries_even_without_c_flag() {
+        let mut history = HistoryStore::new(10, false);
+        for index in 0..300 {
+            history
+                .push(
+                    ScreenSnapshot::from_text_lines(12, 1, &[format!("jobs {index:04}")]),
+                    meta("x"),
+                )
+                .unwrap();
+        }
+
+        let stats = history.stats();
+        assert!(stats.compressed_entries > 0);
+        assert_eq!(
+            history
+                .snapshot(history.len() - 1)
+                .unwrap()
+                .expect("latest")
+                .lines()[0],
+            "jobs 0299".to_string()
+        );
     }
 
     fn meta(label: &str) -> HistoryMetadata {

@@ -3,18 +3,29 @@
 // that can be found in the LICENSE file.
 
 use anyhow::Result;
+use std::sync::mpsc;
 
 use super::config::AppConfig;
-use super::{App, AppHistoryMetadata, FilterMode, InputMode};
+use super::history_ops::build_replay_replace_state;
+use super::{App, AppEvent, AppHistoryMetadata, FilterMode, InputMode, ReplayLoadMessage};
 use crate::cli::Cli;
 use crate::history::HistoryStore;
 use crate::runner::FrameSource;
+
+pub(super) const REPLAY_INITIAL_LOAD_FRAMES: usize = 16;
+pub(super) const REPLAY_SYNC_SMALL_SPILL_MAX_BYTES: u64 = 128 * 1024;
+pub(super) const REPLAY_SYNC_LATEST_SPILL_MAX_BYTES: u64 = 1024 * 1024;
+
+pub(super) fn replay_prefetch_record_count() -> usize {
+    REPLAY_INITIAL_LOAD_FRAMES.saturating_add(1)
+}
 
 impl App {
     pub fn new(cli: &Cli, source: Box<dyn FrameSource>) -> Result<Self> {
         let config = AppConfig::from_cli(cli, source.supports_child_pause())?;
         let mut app = Self {
             debug: config.debug,
+            hide_header: config.hide_header,
             paused: false,
             child_paused: false,
             child_pause_supported: config.child_pause_supported,
@@ -46,6 +57,12 @@ impl App {
             keymap: config.keymap,
             child_bindings: config.child_bindings,
             source,
+            replay_loader: None,
+            replay_reload_path: None,
+            replay_deferred_path: None,
+            replay_event_tx: None,
+            replay_loader_rx: None,
+            replay_loading: false,
             last_mouse_input: None,
             last_mouse_scroll_input: None,
             pending_mouse_escape: None,
@@ -57,8 +74,118 @@ impl App {
             ui: super::UiState::new(),
         };
 
-        app.load_history_from_log()?;
+        if config.replay_mode {
+            app.load_history_from_replay_log_prefetch()?;
+        } else {
+            app.load_history_from_log()?;
+        }
         Ok(app)
+    }
+
+    pub(crate) fn header_rows(&self) -> u16 {
+        if self.hide_header { 0 } else { 2 }
+    }
+
+    pub(crate) fn content_height(&self, total_height: u16) -> u16 {
+        total_height.saturating_sub(self.header_rows())
+    }
+
+    pub(super) fn start_replay_loader(&mut self) {
+        if let Some(path) = self.replay_reload_path.take() {
+            self.start_replay_replace_loader_for_path(path);
+            return;
+        }
+
+        let Some(mut loader) = self.replay_loader.take() else {
+            return;
+        };
+        let (tx, rx) = mpsc::channel();
+        self.replay_loader_rx = Some(rx);
+        self.replay_loading = true;
+        std::thread::spawn(move || {
+            const CHUNK_SIZE: usize = 256;
+            loop {
+                let mut chunk = Vec::with_capacity(CHUNK_SIZE);
+                for _ in 0..CHUNK_SIZE {
+                    match loader.next_record() {
+                        Ok(Some(record)) => chunk.push(record),
+                        Ok(None) => {
+                            if !chunk.is_empty()
+                                && tx.send(ReplayLoadMessage::Records(chunk)).is_err()
+                            {
+                                return;
+                            }
+                            let _ = tx.send(ReplayLoadMessage::Finished);
+                            return;
+                        }
+                        Err(err) => {
+                            let _ = tx.send(ReplayLoadMessage::Failed(err.to_string()));
+                            return;
+                        }
+                    }
+                }
+
+                if tx.send(ReplayLoadMessage::Records(chunk)).is_err() {
+                    return;
+                }
+            }
+        });
+        self.attach_replay_loader_forwarder();
+    }
+
+    pub(super) fn start_deferred_replay_loader(&mut self) -> bool {
+        let Some(path) = self.replay_deferred_path.take() else {
+            return false;
+        };
+        self.start_replay_replace_loader_for_path(path);
+        true
+    }
+
+    fn start_replay_replace_loader_for_path(&mut self, path: String) {
+        let (tx, rx) = mpsc::channel();
+        self.replay_loader_rx = Some(rx);
+        self.replay_loading = true;
+        let checkpoint_interval = self.checkpoint_interval;
+        let compress = self.compress;
+        std::thread::spawn(move || {
+            match build_replay_replace_state(&path, checkpoint_interval, compress) {
+                Ok(state) => {
+                    if tx
+                        .send(ReplayLoadMessage::ReplaceState(Box::new(state)))
+                        .is_err()
+                    {
+                        return;
+                    }
+                    let _ = tx.send(ReplayLoadMessage::Finished);
+                }
+                Err(err) => {
+                    let _ = tx.send(ReplayLoadMessage::Failed(err.to_string()));
+                }
+            }
+        });
+        self.attach_replay_loader_forwarder();
+    }
+
+    pub(super) fn attach_replay_loader_forwarder(&mut self) {
+        let Some(replay_tx) = self.replay_event_tx.clone() else {
+            return;
+        };
+        let Some(replay_rx) = self.replay_loader_rx.take() else {
+            return;
+        };
+        std::thread::spawn(move || {
+            while let Ok(event) = replay_rx.recv() {
+                let app_event = match event {
+                    ReplayLoadMessage::Records(records) => AppEvent::ReplayRecordsLoaded(records),
+                    ReplayLoadMessage::ReplaceState(state) => AppEvent::ReplayStateReplaced(*state),
+                    ReplayLoadMessage::Finished => AppEvent::ReplayLoadFinished,
+                    ReplayLoadMessage::Failed(err) => AppEvent::ReplayLoadFailed(err),
+                };
+                if replay_tx.send(app_event).is_err() {
+                    break;
+                }
+            }
+        });
     }
 
     pub(super) fn command_display_from_cli(cli: &Cli) -> String {
@@ -134,10 +261,16 @@ impl App {
     }
 
     pub(super) fn trim_slack(&self) -> usize {
+        if self.limit == 0 {
+            return 0;
+        }
         self.limit.min(self.checkpoint_interval.max(32))
     }
 
     pub(super) fn trim_trigger_len(&self) -> usize {
+        if self.limit == 0 {
+            return usize::MAX;
+        }
         self.limit.saturating_add(self.trim_slack())
     }
 
