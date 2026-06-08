@@ -112,6 +112,8 @@ pub(super) fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect)
         if app.ui.show_history { "Open" } else { "Close" },
         if app.follow_latest { "Latest" } else { "Hold" }
     );
+    let replay_label = format!("Replay {}", app.auto_replay_status_label());
+    let replay_speed_label = format!("Speed {}", app.auto_replay_speed_label());
     let input_label = if app.ui.app_input_mode {
         "Input On".to_string()
     } else {
@@ -131,6 +133,10 @@ pub(super) fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect)
     };
     let diff_label = app.diff_mode.label().to_string();
     let right_width = badge_width(&hist_label)
+        + 1
+        + badge_width(&replay_label)
+        + 1
+        + badge_width(&replay_speed_label)
         + 1
         + badge_width(&input_label)
         + 1
@@ -166,6 +172,19 @@ pub(super) fn draw_header_line_two(frame: &mut Frame<'_>, app: &App, area: Rect)
 
     let right = Line::from(vec![
         status_badge(hist_label, BADGE_CYAN, true),
+        gap(HEADER_SUB_BG),
+        status_badge(
+            replay_label,
+            match app.auto_replay_status_label() {
+                "Play Fwd" => BADGE_GREEN,
+                "Play Rev" => BADGE_MAGENTA,
+                "Pause Fwd" | "Pause Rev" => BADGE_BLUE,
+                _ => BADGE_GREY,
+            },
+            app.auto_replay_available(),
+        ),
+        gap(HEADER_SUB_BG),
+        status_badge(replay_speed_label, BADGE_BLUE, app.auto_replay_available()),
         gap(HEADER_SUB_BG),
         status_badge(input_label, BADGE_GREEN, true),
         gap(HEADER_SUB_BG),

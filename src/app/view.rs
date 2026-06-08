@@ -81,6 +81,14 @@ impl App {
         }
     }
 
+    pub(crate) fn current_selected_index(&self) -> Option<usize> {
+        if self.follow_latest {
+            None
+        } else {
+            Some(self.selected_index)
+        }
+    }
+
     pub fn selected_input_summary(&self) -> Option<&str> {
         if self.follow_latest {
             self.current_metadata

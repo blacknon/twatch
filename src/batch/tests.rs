@@ -100,6 +100,7 @@ fn test_cli() -> Cli {
         checkpoint_interval: 12,
         debug: false,
         hide_header: false,
+        replay_indicator: true,
         command: vec!["mock".to_string()],
     }
 }

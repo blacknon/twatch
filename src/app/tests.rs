@@ -1765,6 +1765,306 @@ fn replay_replace_state_restores_full_history_after_prefetch() {
 }
 
 #[test]
+fn auto_replay_forward_advances_from_selected_frame_to_latest() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-auto-replay-forward");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    for index in 0..3u64 {
+        append_record(
+            cli.replay.as_deref().unwrap(),
+            &LogRecord {
+                label: format!("frame-{index}"),
+                changed: true,
+                timestamp_unix_ms: (index + 1) * 100,
+                frame_seq: index + 1,
+                width: 20,
+                height: 5,
+                changed_cell_count: 1,
+                input_event_count_since_prev: 0,
+                resized: false,
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: String::new(),
+                snapshot: ScreenSnapshot::from_text_lines(20, 5, &[&format!("line-{index}")]),
+            },
+        )
+        .unwrap();
+    }
+
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+    app.replay_loading = false;
+    app.replay_reload_path = None;
+    app.follow_latest = false;
+    app.selected_index = 0;
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE))
+        .unwrap();
+
+    assert!(
+        app.advance_auto_replay(Instant::now() + Duration::from_secs(5))
+            .unwrap()
+    );
+    assert!(!app.follow_latest);
+    assert_eq!(app.selected_index, 1);
+    assert_eq!(app.auto_replay_status_label(), "Play Fwd");
+
+    assert!(
+        app.advance_auto_replay(Instant::now() + Duration::from_secs(10))
+            .unwrap()
+    );
+    assert!(app.follow_latest);
+
+    assert!(
+        app.advance_auto_replay(Instant::now() + Duration::from_secs(15))
+            .unwrap()
+    );
+    assert_eq!(app.auto_replay_status_label(), "Pause Fwd");
+    assert_eq!(
+        app.ui.status_message.as_deref(),
+        Some("auto replay reached latest frame")
+    );
+
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn auto_replay_reverse_advances_from_latest_to_older_frames() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-auto-replay-reverse");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    for index in 0..3u64 {
+        append_record(
+            cli.replay.as_deref().unwrap(),
+            &LogRecord {
+                label: format!("frame-{index}"),
+                changed: true,
+                timestamp_unix_ms: (index + 1) * 100,
+                frame_seq: index + 1,
+                width: 20,
+                height: 5,
+                changed_cell_count: 1,
+                input_event_count_since_prev: 0,
+                resized: false,
+                resize_from_width: 0,
+                resize_from_height: 0,
+                resize_to_width: 0,
+                resize_to_height: 0,
+                resize_source: String::new(),
+                snapshot: ScreenSnapshot::from_text_lines(20, 5, &[&format!("line-{index}")]),
+            },
+        )
+        .unwrap();
+    }
+
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+    app.replay_loading = false;
+    app.replay_reload_path = None;
+    app.handle_key_event(KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE))
+        .unwrap();
+
+    assert!(
+        app.advance_auto_replay(Instant::now() + Duration::from_secs(5))
+            .unwrap()
+    );
+    assert!(!app.follow_latest);
+    assert_eq!(app.selected_index, 1);
+    assert_eq!(app.auto_replay_status_label(), "Play Rev");
+
+    assert!(
+        app.advance_auto_replay(Instant::now() + Duration::from_secs(10))
+            .unwrap()
+    );
+    assert_eq!(app.selected_index, 0);
+
+    assert!(
+        app.advance_auto_replay(Instant::now() + Duration::from_secs(15))
+            .unwrap()
+    );
+    assert_eq!(app.auto_replay_status_label(), "Pause Rev");
+    assert_eq!(
+        app.ui.status_message.as_deref(),
+        Some("auto replay reached oldest frame")
+    );
+
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn auto_replay_is_rejected_while_filter_is_active() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-auto-replay-filter");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    append_record(
+        cli.replay.as_deref().unwrap(),
+        &LogRecord {
+            label: "frame-0".to_string(),
+            changed: true,
+            timestamp_unix_ms: 100,
+            frame_seq: 1,
+            width: 20,
+            height: 5,
+            changed_cell_count: 1,
+            input_event_count_since_prev: 0,
+            resized: false,
+            resize_from_width: 0,
+            resize_from_height: 0,
+            resize_to_width: 0,
+            resize_to_height: 0,
+            resize_source: String::new(),
+            snapshot: ScreenSnapshot::from_text_lines(20, 5, &["line-0"]),
+        },
+    )
+    .unwrap();
+
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+    app.ui.filter_query = "frame".to_string();
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE))
+        .unwrap();
+
+    assert_eq!(app.auto_replay_status_label(), "Off");
+    assert_eq!(
+        app.ui.status_message.as_deref(),
+        Some("auto replay is unavailable while a filter is active")
+    );
+
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn replay_indicator_label_tracks_auto_replay_direction_and_setting() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-replay-indicator");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    append_record(
+        cli.replay.as_deref().unwrap(),
+        &LogRecord {
+            label: "frame-0".to_string(),
+            changed: true,
+            timestamp_unix_ms: 100,
+            frame_seq: 1,
+            width: 20,
+            height: 5,
+            changed_cell_count: 1,
+            input_event_count_since_prev: 0,
+            resized: false,
+            resize_from_width: 0,
+            resize_from_height: 0,
+            resize_to_width: 0,
+            resize_to_height: 0,
+            resize_source: String::new(),
+            snapshot: ScreenSnapshot::from_text_lines(20, 5, &["line-0"]),
+        },
+    )
+    .unwrap();
+
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+    app.replay_loading = false;
+    app.replay_reload_path = None;
+
+    assert_eq!(app.replay_indicator_label(), None);
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE))
+        .unwrap();
+    assert_eq!(app.replay_indicator_label(), Some("REPLAY"));
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))
+        .unwrap();
+    assert_eq!(app.replay_indicator_label(), None);
+
+    app.replay_indicator = false;
+    app.handle_key_event(KeyEvent::new(KeyCode::Char(','), KeyModifiers::NONE))
+        .unwrap();
+    assert_eq!(app.replay_indicator_label(), None);
+
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn ctrl_c_stops_auto_replay_before_opening_exit_dialog() {
+    let mut cli = test_cli();
+    let dir = unique_temp_dir("twatch-auto-replay-ctrl-c");
+    let path = dir.join("trace.jsonl");
+    fs::create_dir_all(&dir).unwrap();
+    cli.replay = Some(path.to_string_lossy().into_owned());
+
+    append_record(
+        cli.replay.as_deref().unwrap(),
+        &LogRecord {
+            label: "frame-0".to_string(),
+            changed: true,
+            timestamp_unix_ms: 100,
+            frame_seq: 1,
+            width: 20,
+            height: 5,
+            changed_cell_count: 1,
+            input_event_count_since_prev: 0,
+            resized: false,
+            resize_from_width: 0,
+            resize_from_height: 0,
+            resize_to_width: 0,
+            resize_to_height: 0,
+            resize_source: String::new(),
+            snapshot: ScreenSnapshot::from_text_lines(20, 5, &["line-0"]),
+        },
+    )
+    .unwrap();
+
+    let mut app = App::new(
+        &cli,
+        Box::new(MockSource::new(vec![frame("unused", &["x"])])),
+    )
+    .unwrap();
+    app.replay_loading = false;
+    app.replay_reload_path = None;
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE))
+        .unwrap();
+
+    assert_eq!(app.replay_indicator_label(), Some("REPLAY"));
+
+    app.handle_key_event(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL))
+        .unwrap();
+
+    assert_eq!(app.replay_indicator_label(), None);
+    assert!(app.ui.show_exit_confirm);
+
+    let _ = fs::remove_file(&path);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn save_snapshot_uses_configured_directory_and_format() {
     let mut cli = test_cli();
     let dir = unique_temp_dir("twatch-shot-test");
@@ -1993,6 +2293,7 @@ fn test_cli() -> Cli {
         checkpoint_interval: 12,
         debug: false,
         hide_header: false,
+        replay_indicator: true,
         command: vec!["mock".to_string()],
     }
 }

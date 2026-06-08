@@ -10,11 +10,12 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::{Frame, widgets::Widget};
 use regex::Regex;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::app::{App, DiffMode, FilterMode};
 use crate::screen::{Cell, ScreenSnapshot};
 
-use super::{BORDER_ACTIVE, DIFF_BG, DIFF_FG, PANEL_BG, SEARCH_BG};
+use super::{BADGE_CYAN, BADGE_MAGENTA, BORDER_ACTIVE, DIFF_BG, DIFF_FG, PANEL_BG, SEARCH_BG};
 
 pub(super) fn draw_watch(frame: &mut Frame<'_>, app: &App, area: Rect) {
     let debug_height = if app.debug && app.source_debug_status().is_some() {
@@ -73,6 +74,8 @@ pub(super) fn draw_watch(frame: &mut Frame<'_>, app: &App, area: Rect) {
             frame.set_cursor_position(position);
         }
     }
+
+    draw_replay_indicator(frame, watch_chunks[0], app.replay_indicator_label());
 
     if debug_height > 0 {
         draw_debug_status(frame, watch_chunks[2], app.source_debug_status().as_deref());
@@ -276,6 +279,44 @@ fn draw_debug_status(frame: &mut Frame<'_>, area: Rect, debug_status: Option<&st
     let widget = Paragraph::new(Line::from(line.to_string()))
         .style(Style::default().fg(Color::Indexed(244)).bg(PANEL_BG));
     frame.render_widget(widget, area);
+}
+
+fn draw_replay_indicator(frame: &mut Frame<'_>, area: Rect, label: Option<&str>) {
+    let Some(label) = label else {
+        return;
+    };
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    if !replay_indicator_is_visible() {
+        return;
+    }
+
+    let text = format!(" {label} ");
+    let width = text.len().min(usize::from(area.width)) as u16;
+    let indicator_area = Rect::new(area.x, area.bottom().saturating_sub(1), width, 1);
+    let widget = Paragraph::new(Line::from(text)).style(
+        Style::default()
+            .fg(Color::White)
+            .bg(if label == "REPLAY" {
+                BADGE_CYAN
+            } else {
+                BADGE_MAGENTA
+            })
+            .add_modifier(Modifier::BOLD),
+    );
+    frame.render_widget(widget, indicator_area);
+}
+
+fn replay_indicator_is_visible() -> bool {
+    const REPLAY_INDICATOR_ON_MS: u128 = 1_000;
+    const REPLAY_INDICATOR_CYCLE_MS: u128 = REPLAY_INDICATOR_ON_MS * 2;
+
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::ZERO)
+        .as_millis();
+    elapsed % REPLAY_INDICATOR_CYCLE_MS < REPLAY_INDICATOR_ON_MS
 }
 
 fn watch_cursor_position(

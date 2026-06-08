@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.6
+
+- Add automatic replay controls for `--replay` sessions, with timestamp-based forward playback, reverse playback, pause/resume, and speed adjustment
+- Start auto replay from the current position instead of forcing a jump to the oldest or newest frame first
+- Show replay direction, play/pause state, and playback speed in the header so auto replay is visually obvious while it is active
+- Add an optional blinking lower-left `REPLAY` / `REWIND` overlay during active auto replay, controllable with `--replay-indicator`
+- Pause auto replay automatically at the oldest or newest available frame, and keep reverse playback compatible with deferred older-history loading
+- Reject auto replay while a replay filter is active so the playback cursor stays consistent with the full timeline
+- Update the in-app help and README to document the new replay shortcuts
+
+This release turns replay mode into a timeline player instead of a purely manual history browser.
+It keeps the interaction model lightweight while making it much easier to scrub through recorded terminal sessions in chronological order.
+
+Notes:
+
+- Auto replay is available only in `--replay` mode
+- `,` starts or pauses reverse playback, `.` starts or pauses forward playback, `Space` pauses or resumes the current direction, and `[` / `]` adjust playback speed
+- Playback timing follows recorded frame timestamps and clamps very long gaps so sparse traces remain practical to review
+
 ## 0.1.5
 
 - Add `--record-stdin` so `twatch` can record terminal output from stdin without spawning a child PTY

@@ -6,7 +6,8 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::app::{
-    App, BrokenMouseEscape, DiffMode, FocusPane, InputMode, MOUSE_ESCAPE_GHOST_TIMEOUT,
+    App, AutoReplayDirection, BrokenMouseEscape, DiffMode, FocusPane, InputMode,
+    MOUSE_ESCAPE_GHOST_TIMEOUT,
 };
 
 impl App {
@@ -105,6 +106,7 @@ impl App {
         match (key.code, key.modifiers) {
             (KeyCode::Char('q'), _) => self.ui.show_exit_confirm = true,
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                self.stop_auto_replay();
                 if self.ui.filter_query.is_empty() {
                     self.ui.show_exit_confirm = true;
                 } else {
@@ -167,12 +169,50 @@ impl App {
             (KeyCode::Char('1'), _) => self.diff_mode = DiffMode::Watch,
             (KeyCode::Char('P'), _) => self.toggle_child_pause()?,
             (KeyCode::Char('p'), _) => self.paused = !self.paused,
-            (KeyCode::Up, _) => self.move_up(),
-            (KeyCode::Down, _) => self.move_down(),
-            (KeyCode::PageUp, _) => self.page_up(),
-            (KeyCode::PageDown, _) => self.page_down(),
-            (KeyCode::Home, _) => self.move_top(),
-            (KeyCode::End, _) => self.move_end(),
+            (KeyCode::Char(','), KeyModifiers::NONE) => {
+                self.toggle_auto_replay(AutoReplayDirection::Reverse)
+            }
+            (KeyCode::Char('.'), KeyModifiers::NONE) => {
+                self.toggle_auto_replay(AutoReplayDirection::Forward)
+            }
+            (KeyCode::Char(' '), KeyModifiers::NONE) => {
+                if let super::AutoReplayState::Stopped = self.auto_replay_state {
+                    self.toggle_auto_replay(AutoReplayDirection::Forward);
+                } else {
+                    let direction = match self.auto_replay_state {
+                        super::AutoReplayState::Playing(direction)
+                        | super::AutoReplayState::Paused(direction) => direction,
+                        super::AutoReplayState::Stopped => AutoReplayDirection::Forward,
+                    };
+                    self.toggle_auto_replay(direction);
+                }
+            }
+            (KeyCode::Char('['), _) => self.adjust_auto_replay_speed(false),
+            (KeyCode::Char(']'), _) => self.adjust_auto_replay_speed(true),
+            (KeyCode::Up, _) => {
+                self.stop_auto_replay();
+                self.move_up()
+            }
+            (KeyCode::Down, _) => {
+                self.stop_auto_replay();
+                self.move_down()
+            }
+            (KeyCode::PageUp, _) => {
+                self.stop_auto_replay();
+                self.page_up()
+            }
+            (KeyCode::PageDown, _) => {
+                self.stop_auto_replay();
+                self.page_down()
+            }
+            (KeyCode::Home, _) => {
+                self.stop_auto_replay();
+                self.move_top()
+            }
+            (KeyCode::End, _) => {
+                self.stop_auto_replay();
+                self.move_end()
+            }
             _ => {}
         }
         Ok(false)

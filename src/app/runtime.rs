@@ -5,7 +5,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{self, Event};
@@ -17,6 +17,8 @@ use crate::ui;
 
 impl App {
     const EVENT_POLL_TIMEOUT: Duration = Duration::from_millis(50);
+    const AUTO_REPLAY_POLL_FLOOR: Duration = Duration::from_millis(1);
+    const REPLAY_INDICATOR_POLL: Duration = Duration::from_millis(250);
 
     pub fn run(mut self, terminal: DefaultTerminal) -> Result<()> {
         let (tx, rx) = mpsc::channel();
@@ -77,6 +79,28 @@ impl App {
         self.capture(size.width, self.content_height(size.height))
     }
 
+    fn event_poll_timeout(&self) -> Duration {
+        if !self.auto_replay_state.is_playing() {
+            return if self.replay_indicator_label().is_some() {
+                Self::REPLAY_INDICATOR_POLL
+            } else {
+                Self::EVENT_POLL_TIMEOUT
+            };
+        }
+        let Some(next_tick) = self.auto_replay_next_tick else {
+            return Self::AUTO_REPLAY_POLL_FLOOR;
+        };
+        let now = Instant::now();
+        if next_tick <= now {
+            return Duration::ZERO;
+        }
+        next_tick
+            .saturating_duration_since(now)
+            .min(Self::EVENT_POLL_TIMEOUT)
+            .min(Self::REPLAY_INDICATOR_POLL)
+            .max(Self::AUTO_REPLAY_POLL_FLOOR)
+    }
+
     fn resize_and_capture(&mut self, width: u16, height: u16) -> Result<()> {
         let content_height = self.content_height(height);
         self.note_resize_event(width, content_height, "terminal");
@@ -112,7 +136,7 @@ impl App {
             }
 
             if self.source.is_event_driven() {
-                match rx.recv_timeout(Self::EVENT_POLL_TIMEOUT) {
+                match rx.recv_timeout(self.event_poll_timeout()) {
                     Ok(AppEvent::Terminal(event)) => match self.process_terminal_event(event)? {
                         LoopControl::Continue(redraw) => {
                             if !self.paused && self.source.has_pending_update() {
@@ -172,12 +196,14 @@ impl App {
                             }
                             self.capture_terminal_size(&terminal)?;
                             needs_redraw = true;
+                        } else if self.replay_indicator_label().is_some() {
+                            needs_redraw = true;
                         }
                     }
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
             } else {
-                match rx.recv_timeout(Self::EVENT_POLL_TIMEOUT) {
+                match rx.recv_timeout(self.event_poll_timeout()) {
                     Ok(AppEvent::Terminal(event)) => match self.process_terminal_event(event)? {
                         LoopControl::Continue(redraw) => {
                             needs_redraw = redraw || needs_redraw;
@@ -206,9 +232,17 @@ impl App {
                         self.ui.status_message = Some(format!("replay load failed: {err}"));
                         needs_redraw = true;
                     }
-                    Err(RecvTimeoutError::Timeout) => {}
+                    Err(RecvTimeoutError::Timeout) => {
+                        if self.replay_indicator_label().is_some() {
+                            needs_redraw = true;
+                        }
+                    }
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
+            }
+
+            if self.advance_auto_replay(Instant::now())? {
+                needs_redraw = true;
             }
         }
 

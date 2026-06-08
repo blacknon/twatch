@@ -51,6 +51,9 @@ fn help_lines() -> Vec<Line<'static>> {
         Line::from("d / 0 1       diff mode"),
         Line::from("p             pause twatch capture"),
         Line::from("Shift+P       pause child process"),
+        Line::from(", / .         auto replay reverse / forward"),
+        Line::from("Space         auto replay pause / resume"),
+        Line::from("[ / ]         auto replay speed down / up"),
         Line::from("Alt+Left/Right horizontal scroll"),
     ]
 }
@@ -107,5 +110,6 @@ mod tests {
             .map(|line| line.to_string())
             .collect();
         assert!(rendered.iter().any(|line| line.contains("Shift+H")));
+        assert!(rendered.iter().any(|line| line.contains(", / .")));
     }
 }

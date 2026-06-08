@@ -7,7 +7,9 @@ use std::sync::mpsc;
 
 use super::config::AppConfig;
 use super::history_ops::build_replay_replace_state;
-use super::{App, AppEvent, AppHistoryMetadata, FilterMode, InputMode, ReplayLoadMessage};
+use super::{
+    App, AppEvent, AppHistoryMetadata, AutoReplayState, FilterMode, InputMode, ReplayLoadMessage,
+};
 use crate::cli::Cli;
 use crate::history::HistoryStore;
 use crate::runner::FrameSource;
@@ -26,6 +28,7 @@ impl App {
         let mut app = Self {
             debug: config.debug,
             hide_header: config.hide_header,
+            replay_indicator: config.replay_indicator,
             paused: false,
             child_paused: false,
             child_pause_supported: config.child_pause_supported,
@@ -63,6 +66,9 @@ impl App {
             replay_event_tx: None,
             replay_loader_rx: None,
             replay_loading: false,
+            auto_replay_state: AutoReplayState::Stopped,
+            auto_replay_speed: 1.0,
+            auto_replay_next_tick: None,
             last_mouse_input: None,
             last_mouse_scroll_input: None,
             pending_mouse_escape: None,

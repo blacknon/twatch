@@ -495,6 +495,7 @@ mod tests {
             checkpoint_interval: 12,
             debug: false,
             hide_header: false,
+            replay_indicator: true,
             command: Vec::new(),
         };
 

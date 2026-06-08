@@ -181,6 +181,14 @@ pub struct Cli {
     #[arg(long, help = "Hide the two-line interactive header")]
     pub hide_header: bool,
 
+    #[arg(
+        long,
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        help = "Show the blinking replay/rewind indicator in the lower-left watch area during auto replay"
+    )]
+    pub replay_indicator: bool,
+
     #[arg()]
     pub command: Vec<String>,
 }
@@ -368,5 +376,11 @@ mod tests {
         let cli = Cli::parse_from(["twatch", "--hide-header", "--replay", "trace.jsonl"]);
         assert!(cli.hide_header);
         assert_eq!(cli.replay.as_deref(), Some("trace.jsonl"));
+    }
+
+    #[test]
+    fn parses_replay_indicator_toggle() {
+        let cli = Cli::parse_from(["twatch", "--replay-indicator=false"]);
+        assert!(!cli.replay_indicator);
     }
 }

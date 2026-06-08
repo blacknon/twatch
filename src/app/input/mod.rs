@@ -2,12 +2,14 @@
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
-use super::{App, DiffMode, FilterMode, FocusPane, InputMode};
+use super::{
+    App, AutoReplayDirection, AutoReplayState, DiffMode, FilterMode, FocusPane, InputMode,
+};
 use crate::child_bindings::{ChildBindingAction, ChildBindingKey};
 use crate::input_key::KeyPress;
 use crate::keymap::KeyAction;
@@ -18,6 +20,10 @@ mod mouse;
 mod trace;
 
 impl App {
+    const AUTO_REPLAY_MAX_DELAY: Duration = Duration::from_secs(2);
+    const AUTO_REPLAY_MIN_DELAY: Duration = Duration::from_millis(16);
+    const AUTO_REPLAY_SPEED_STEPS: [f32; 6] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
+
     fn toggle_child_pause(&mut self) -> Result<()> {
         match self.source.toggle_child_pause()? {
             Some(paused) => {
@@ -114,6 +120,271 @@ impl App {
         });
     }
 
+    pub(crate) fn auto_replay_available(&self) -> bool {
+        self.replay_mode
+    }
+
+    pub(crate) fn auto_replay_status_label(&self) -> &'static str {
+        match self.auto_replay_state {
+            AutoReplayState::Stopped => "Off",
+            AutoReplayState::Playing(direction) => match direction {
+                AutoReplayDirection::Forward => "Play Fwd",
+                AutoReplayDirection::Reverse => "Play Rev",
+            },
+            AutoReplayState::Paused(direction) => match direction {
+                AutoReplayDirection::Forward => "Pause Fwd",
+                AutoReplayDirection::Reverse => "Pause Rev",
+            },
+        }
+    }
+
+    pub(crate) fn auto_replay_speed_label(&self) -> String {
+        format!("{:.2}x", self.auto_replay_speed)
+    }
+
+    pub(crate) fn replay_indicator_label(&self) -> Option<&'static str> {
+        if !self.replay_indicator {
+            return None;
+        }
+        match self.auto_replay_state {
+            AutoReplayState::Playing(AutoReplayDirection::Forward) => Some("REPLAY"),
+            AutoReplayState::Playing(AutoReplayDirection::Reverse) => Some("REWIND"),
+            AutoReplayState::Stopped | AutoReplayState::Paused(_) => None,
+        }
+    }
+
+    fn stop_auto_replay(&mut self) {
+        self.auto_replay_state = AutoReplayState::Stopped;
+        self.auto_replay_next_tick = None;
+    }
+
+    fn pause_auto_replay(&mut self, direction: AutoReplayDirection) {
+        self.auto_replay_state = AutoReplayState::Paused(direction);
+        self.auto_replay_next_tick = None;
+    }
+
+    fn start_auto_replay(&mut self, direction: AutoReplayDirection) {
+        self.auto_replay_state = AutoReplayState::Playing(direction);
+        self.auto_replay_next_tick = Some(Instant::now());
+    }
+
+    fn toggle_auto_replay(&mut self, direction: AutoReplayDirection) {
+        if !self.auto_replay_available() {
+            self.ui.status_message =
+                Some("auto replay is available only in replay mode".to_string());
+            return;
+        }
+        if !self.ui.filter_query.is_empty() || self.is_search_mode() {
+            self.ui.status_message =
+                Some("auto replay is unavailable while a filter is active".to_string());
+            return;
+        }
+
+        match self.auto_replay_state {
+            AutoReplayState::Playing(current) if current == direction => {
+                self.pause_auto_replay(direction);
+                self.ui.status_message = Some(format!(
+                    "auto replay paused ({})",
+                    direction.label().to_lowercase()
+                ));
+            }
+            AutoReplayState::Paused(current) if current == direction => {
+                self.start_auto_replay(direction);
+                self.ui.status_message = Some(format!(
+                    "auto replay resumed ({}, timestamp, {})",
+                    direction.label().to_lowercase(),
+                    self.auto_replay_speed_label()
+                ));
+            }
+            _ => {
+                self.start_auto_replay(direction);
+                self.ui.status_message = Some(format!(
+                    "auto replay started ({}, timestamp, {})",
+                    direction.label().to_lowercase(),
+                    self.auto_replay_speed_label()
+                ));
+            }
+        }
+    }
+
+    fn adjust_auto_replay_speed(&mut self, faster: bool) {
+        if !self.auto_replay_available() {
+            self.ui.status_message =
+                Some("auto replay speed is available only in replay mode".to_string());
+            return;
+        }
+
+        let current_index = Self::AUTO_REPLAY_SPEED_STEPS
+            .iter()
+            .position(|speed| (*speed - self.auto_replay_speed).abs() < f32::EPSILON)
+            .unwrap_or(2);
+        let next_index = if faster {
+            (current_index + 1).min(Self::AUTO_REPLAY_SPEED_STEPS.len() - 1)
+        } else {
+            current_index.saturating_sub(1)
+        };
+        self.auto_replay_speed = Self::AUTO_REPLAY_SPEED_STEPS[next_index];
+        self.ui.status_message = Some(format!(
+            "auto replay speed: {}",
+            self.auto_replay_speed_label()
+        ));
+        if self.auto_replay_state.is_playing() {
+            self.auto_replay_next_tick = Some(Instant::now());
+        }
+    }
+
+    fn replay_neighbor_index(
+        &self,
+        direction: AutoReplayDirection,
+    ) -> Option<(Option<usize>, u64, u64)> {
+        let current = self.selected_history_metadata()?;
+        match direction {
+            AutoReplayDirection::Forward => {
+                if let Some(index) = self.current_selected_index() {
+                    if index + 1 < self.metadata.len() {
+                        let next = &self.metadata[index + 1];
+                        Some((
+                            Some(index + 1),
+                            current.timestamp_unix_ms,
+                            next.timestamp_unix_ms,
+                        ))
+                    } else {
+                        let next = self.current_metadata.as_ref()?;
+                        Some((None, current.timestamp_unix_ms, next.timestamp_unix_ms))
+                    }
+                } else {
+                    None
+                }
+            }
+            AutoReplayDirection::Reverse => {
+                if self.follow_latest {
+                    let next_index = self.metadata.len().checked_sub(1)?;
+                    let next = &self.metadata[next_index];
+                    Some((
+                        Some(next_index),
+                        current.timestamp_unix_ms,
+                        next.timestamp_unix_ms,
+                    ))
+                } else if let Some(index) = self.current_selected_index() {
+                    if index == 0 {
+                        None
+                    } else {
+                        let next = &self.metadata[index - 1];
+                        Some((
+                            Some(index - 1),
+                            current.timestamp_unix_ms,
+                            next.timestamp_unix_ms,
+                        ))
+                    }
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    fn apply_auto_replay_step(&mut self, direction: AutoReplayDirection) -> bool {
+        match direction {
+            AutoReplayDirection::Forward => {
+                if let Some(index) = self.current_selected_index() {
+                    if index + 1 < self.metadata.len() {
+                        self.selected_index = index + 1;
+                        self.follow_latest = false;
+                    } else {
+                        self.follow_latest = true;
+                    }
+                    self.reset_watch_viewport();
+                    self.clear_live_scrollback_view();
+                    self.invalidate_view_cache();
+                    true
+                } else {
+                    false
+                }
+            }
+            AutoReplayDirection::Reverse => {
+                if self.follow_latest {
+                    if let Some(index) = self.metadata.len().checked_sub(1) {
+                        self.selected_index = index;
+                        self.follow_latest = false;
+                        self.reset_watch_viewport();
+                        self.clear_live_scrollback_view();
+                        self.invalidate_view_cache();
+                        return true;
+                    }
+                    return false;
+                }
+                if self.selected_index > 0 {
+                    self.selected_index -= 1;
+                    self.follow_latest = false;
+                    self.reset_watch_viewport();
+                    self.clear_live_scrollback_view();
+                    self.invalidate_view_cache();
+                    return true;
+                }
+                false
+            }
+        }
+    }
+
+    fn auto_replay_step_delay(&self, current_ts: u64, next_ts: u64) -> Duration {
+        let delta_ms = current_ts.abs_diff(next_ts).max(1);
+        let scaled_ms = ((delta_ms as f64) / f64::from(self.auto_replay_speed))
+            .round()
+            .clamp(
+                Self::AUTO_REPLAY_MIN_DELAY.as_millis() as f64,
+                Self::AUTO_REPLAY_MAX_DELAY.as_millis() as f64,
+            ) as u64;
+        Duration::from_millis(scaled_ms)
+    }
+
+    pub(crate) fn advance_auto_replay(&mut self, now: Instant) -> Result<bool> {
+        let AutoReplayState::Playing(direction) = self.auto_replay_state else {
+            return Ok(false);
+        };
+        let Some(next_tick) = self.auto_replay_next_tick else {
+            self.auto_replay_next_tick = Some(now);
+            return Ok(false);
+        };
+        if now < next_tick {
+            return Ok(false);
+        }
+        if self.replay_loading {
+            self.auto_replay_next_tick = Some(now + Duration::from_millis(100));
+            return Ok(false);
+        }
+
+        let Some((_, current_ts, next_ts)) = self.replay_neighbor_index(direction) else {
+            if direction == AutoReplayDirection::Reverse
+                && self.replay_deferred_path.is_some()
+                && !self.replay_loading
+                && self.start_deferred_replay_loader()
+            {
+                self.ui.status_message =
+                    Some("loading older replay history in background".to_string());
+                self.auto_replay_next_tick = Some(now + Duration::from_millis(100));
+                return Ok(true);
+            }
+
+            self.pause_auto_replay(direction);
+            self.ui.status_message = Some(format!(
+                "auto replay reached {} frame",
+                match direction {
+                    AutoReplayDirection::Forward => "latest",
+                    AutoReplayDirection::Reverse => "oldest",
+                }
+            ));
+            return Ok(true);
+        };
+
+        if !self.apply_auto_replay_step(direction) {
+            self.pause_auto_replay(direction);
+            return Ok(true);
+        }
+
+        self.auto_replay_next_tick = Some(now + self.auto_replay_step_delay(current_ts, next_ts));
+        Ok(true)
+    }
+
     fn should_ignore_mouse_ghost_key(&self, key: KeyEvent) -> bool {
         let Some(last_mouse_scroll_input) = self.last_mouse_scroll_input else {
             return false;
@@ -204,48 +475,73 @@ impl App {
 
     fn execute_key_action(&mut self, action: KeyAction) -> Result<bool> {
         match action {
-            KeyAction::Up => self.move_up(),
+            KeyAction::Up => {
+                self.stop_auto_replay();
+                self.move_up()
+            }
             KeyAction::WatchPaneUp => {
+                self.stop_auto_replay();
                 self.ui.focus = FocusPane::Watch;
                 self.scroll_selected_watch_view(-1);
             }
             KeyAction::HistoryPaneUp => {
+                self.stop_auto_replay();
                 self.ui.focus = FocusPane::History;
                 self.move_history_by(-1);
             }
-            KeyAction::Down => self.move_down(),
+            KeyAction::Down => {
+                self.stop_auto_replay();
+                self.move_down()
+            }
             KeyAction::WatchPaneDown => {
+                self.stop_auto_replay();
                 self.ui.focus = FocusPane::Watch;
                 self.scroll_selected_watch_view(1);
             }
             KeyAction::HistoryPaneDown => {
+                self.stop_auto_replay();
                 self.ui.focus = FocusPane::History;
                 self.move_history_by(1);
             }
-            KeyAction::PageUp => self.page_up(),
+            KeyAction::PageUp => {
+                self.stop_auto_replay();
+                self.page_up()
+            }
             KeyAction::WatchPanePageUp => {
+                self.stop_auto_replay();
                 self.ui.focus = FocusPane::Watch;
                 self.scroll_selected_watch_view(-10);
             }
             KeyAction::HistoryPanePageUp => {
+                self.stop_auto_replay();
                 self.ui.focus = FocusPane::History;
                 self.move_history_by(-10);
             }
-            KeyAction::PageDown => self.page_down(),
+            KeyAction::PageDown => {
+                self.stop_auto_replay();
+                self.page_down()
+            }
             KeyAction::WatchPanePageDown => {
+                self.stop_auto_replay();
                 self.ui.focus = FocusPane::Watch;
                 self.scroll_selected_watch_view(10);
             }
             KeyAction::HistoryPanePageDown => {
+                self.stop_auto_replay();
                 self.ui.focus = FocusPane::History;
                 self.move_history_by(10);
             }
-            KeyAction::MoveTop => self.move_top(),
+            KeyAction::MoveTop => {
+                self.stop_auto_replay();
+                self.move_top()
+            }
             KeyAction::WatchPaneMoveTop => {
+                self.stop_auto_replay();
                 self.ui.focus = FocusPane::Watch;
                 self.ui.watch_scroll = 0;
             }
             KeyAction::HistoryPaneMoveTop => {
+                self.stop_auto_replay();
                 self.ui.focus = FocusPane::History;
                 self.follow_latest = true;
                 if let Some(first) = self.filtered.first().copied() {
@@ -253,12 +549,17 @@ impl App {
                 }
                 self.invalidate_view_cache();
             }
-            KeyAction::MoveEnd => self.move_end(),
+            KeyAction::MoveEnd => {
+                self.stop_auto_replay();
+                self.move_end()
+            }
             KeyAction::WatchPaneMoveEnd => {
+                self.stop_auto_replay();
                 self.ui.focus = FocusPane::Watch;
                 self.ui.watch_scroll = usize::MAX / 2;
             }
             KeyAction::HistoryPaneMoveEnd => {
+                self.stop_auto_replay();
                 self.ui.focus = FocusPane::History;
                 if let Some(last) = self.filtered.last().copied() {
                     self.selected_index = last;

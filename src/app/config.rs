@@ -32,6 +32,7 @@ pub(super) struct AppConfig {
     pub command_display: String,
     pub debug: bool,
     pub hide_header: bool,
+    pub replay_indicator: bool,
     pub keymap: Vec<KeyBinding>,
     pub child_bindings: Vec<ChildBinding>,
 }
@@ -86,6 +87,7 @@ impl AppConfig {
             command_display,
             debug: cli.debug,
             hide_header: cli.hide_header,
+            replay_indicator: cli.replay_indicator,
             keymap,
             child_bindings,
         })

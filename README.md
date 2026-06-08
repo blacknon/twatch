@@ -149,6 +149,10 @@ Options:
 | `1` | Enable watch diff |
 | `p` | Pause/unpause capture |
 | `Shift+P` | Pause/unpause the child process |
+| `,` | Start/pause reverse auto replay in `--replay` mode |
+| `.` | Start/pause forward auto replay in `--replay` mode |
+| `Space` | Pause/resume the current auto replay direction |
+| `[` / `]` | Decrease/increase auto replay speed |
 | `I` | Toggle cell inspector |
 | `Shift+Arrow` | Move inspector cursor |
 | `/` | Filter history by string |
@@ -231,6 +235,12 @@ twatch -k ctrl-j=text:gg -k ctrl-t=screenshot nvim
 - Snapshot save defaults to `/tmp`, and text output keeps ANSI color escapes.
 - `p` pauses `twatch` screen capture and history updates.
 - `Shift+P` suspends or resumes the wrapped child process.
+- Auto replay is available only in `--replay` mode and is disabled while a
+  history filter is active.
+- `--replay-indicator=false` hides the blinking lower-left `REPLAY` / `REWIND`
+  overlay during auto replay.
+- Auto replay follows recorded frame timestamps and clamps very large gaps so
+  sparse traces remain reviewable.
 
 ## Example
 

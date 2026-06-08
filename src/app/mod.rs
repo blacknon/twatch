@@ -63,6 +63,34 @@ enum LoopControl {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum AutoReplayDirection {
+    Forward,
+    Reverse,
+}
+
+impl AutoReplayDirection {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Forward => "Forward",
+            Self::Reverse => "Reverse",
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum AutoReplayState {
+    Stopped,
+    Playing(AutoReplayDirection),
+    Paused(AutoReplayDirection),
+}
+
+impl AutoReplayState {
+    fn is_playing(self) -> bool {
+        matches!(self, Self::Playing(_))
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum FocusPane {
     Watch,
     History,
@@ -308,6 +336,7 @@ impl InputTraceEvent {
 pub struct App {
     pub debug: bool,
     pub hide_header: bool,
+    pub replay_indicator: bool,
     pub paused: bool,
     pub child_paused: bool,
     pub child_pause_supported: bool,
@@ -345,6 +374,9 @@ pub struct App {
     replay_event_tx: Option<mpsc::Sender<AppEvent>>,
     replay_loader_rx: Option<mpsc::Receiver<ReplayLoadMessage>>,
     replay_loading: bool,
+    auto_replay_state: AutoReplayState,
+    auto_replay_speed: f32,
+    auto_replay_next_tick: Option<Instant>,
     last_mouse_input: Option<Instant>,
     last_mouse_scroll_input: Option<Instant>,
     pending_mouse_escape: Option<BrokenMouseEscape>,
