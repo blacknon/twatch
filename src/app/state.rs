@@ -197,8 +197,6 @@ impl App {
     pub(super) fn command_display_from_cli(cli: &Cli) -> String {
         if let Some(path) = &cli.replay {
             format!("replay: {path}")
-        } else if cli.command.is_empty() {
-            "demo".to_string()
         } else {
             cli.command.join(" ")
         }

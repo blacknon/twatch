@@ -74,22 +74,8 @@ pub enum SourceEvent {
     ClosedWithError(String),
 }
 
-pub struct DemoRunner {
-    sequence: u64,
-    last_snapshot: Option<ScreenSnapshot>,
-}
-
 pub struct ReplayRunner {
     frame: CaptureFrame,
-}
-
-impl DemoRunner {
-    pub fn new() -> Self {
-        Self {
-            sequence: 0,
-            last_snapshot: None,
-        }
-    }
 }
 
 impl ReplayRunner {
@@ -132,71 +118,6 @@ fn latest_replay_record(path: &str) -> Result<crate::logging::LogRecord> {
         .last()
         .cloned()
         .context("replay log does not contain any frames")
-}
-
-impl FrameSource for DemoRunner {
-    fn capture(&mut self, width: u16, height: u16) -> Result<CaptureFrame> {
-        self.sequence += 1;
-        let phase = (self.sequence % 4) as usize;
-        let states = [
-            ("starting", "booting workers", "queue=12 inflight=1"),
-            ("running", "workers healthy", "queue=8 inflight=3"),
-            ("degraded", "worker-2 retrying", "queue=14 inflight=2"),
-            ("recovered", "all workers healthy", "queue=7 inflight=4"),
-        ];
-        let (status, details, counters) = states[phase];
-
-        let snapshot = ScreenSnapshot::from_text_lines(
-            width,
-            height,
-            &[
-                "service: demo-api",
-                &format!("status: {status}"),
-                details,
-                counters,
-                &format!("last tick: {:04}", self.sequence),
-            ],
-        );
-        let raw_output = snapshot.lines().join("\n");
-        let changed = self.last_snapshot.as_ref() != Some(&snapshot);
-        self.last_snapshot = Some(snapshot.clone());
-
-        Ok(CaptureFrame {
-            label: time_label(),
-            timestamp_unix_ms: unix_timestamp_millis(),
-            snapshot,
-            raw_output,
-            changed,
-        })
-    }
-
-    fn resize(&mut self, _width: u16, _height: u16) -> Result<()> {
-        Ok(())
-    }
-
-    fn send_key(&mut self, _key: KeyEvent) -> Result<()> {
-        Ok(())
-    }
-
-    fn send_mouse(&mut self, _event: MouseEvent, _body_row_offset: u16) -> Result<bool> {
-        Ok(false)
-    }
-
-    fn has_pending_update(&self) -> bool {
-        false
-    }
-
-    fn is_event_driven(&self) -> bool {
-        false
-    }
-
-    fn take_update_receiver(&mut self) -> Option<Receiver<SourceEvent>> {
-        None
-    }
-
-    fn terminate(&mut self) -> Result<()> {
-        Ok(())
-    }
 }
 
 impl FrameSource for ReplayRunner {
@@ -251,7 +172,7 @@ pub(crate) fn unix_timestamp_millis() -> u64 {
 mod tests {
     use std::io::Cursor;
 
-    use super::{DemoRunner, FrameSource, PipeRunner, ReplayRunner};
+    use super::{FrameSource, PipeRunner, ReplayRunner};
     use crate::logging::{LogRecord, append_record};
     use crate::runner::capture_hook::parse_shell;
     use crate::screen::ScreenSnapshot;
@@ -388,10 +309,6 @@ mod tests {
 
     #[test]
     fn non_pty_sources_do_not_support_child_pause() {
-        let mut demo = DemoRunner::new();
-        assert!(!demo.supports_child_pause());
-        assert!(demo.toggle_child_pause().unwrap().is_none());
-
         let mut replay = ReplayRunner {
             frame: super::CaptureFrame {
                 label: "x".to_string(),

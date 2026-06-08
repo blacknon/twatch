@@ -25,10 +25,10 @@ use twatch::logging::{
     LogRecord, active_spill_path, append_delta_record, append_recent_record, compact_active_log,
     pack_log_as_compact_archive,
 };
-use twatch::runner::{DemoRunner, FrameSource, PipeRunner, PtyRunner, ReplayRunner, SourceEvent};
+use twatch::runner::{FrameSource, PipeRunner, PtyRunner, ReplayRunner, SourceEvent};
 use twatch::screen::ScreenSnapshot;
 
-const DEMO_BATCH_INTERVAL: Duration = Duration::from_millis(500);
+const BATCH_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const RECORD_STDIN_SETTLE_DELAY: Duration = Duration::from_millis(16);
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -95,7 +95,7 @@ fn run_batch(cli: Cli) -> Result<()> {
                 BatchLoopStep::Break => break,
             }
         } else {
-            std::thread::sleep(DEMO_BATCH_INTERVAL);
+            std::thread::sleep(BATCH_POLL_INTERVAL);
         }
 
         let frame = source.capture(width, height)?;
@@ -310,7 +310,7 @@ fn build_source(
     }
 
     if cli.command.is_empty() {
-        return Ok(Box::new(DemoRunner::new()));
+        anyhow::bail!("command is required unless --replay is used");
     }
 
     let aftercommand = match mode {
@@ -340,11 +340,7 @@ fn build_batch_aftercommand_runtime(cli: &Cli) -> Result<Option<AfterCommandRunt
         })
         .transpose()?;
 
-    let command_display = if cli.command.is_empty() {
-        "demo".to_string()
-    } else {
-        cli.command.join(" ")
-    };
+    let command_display = cli.command.join(" ");
 
     Ok(Some(AfterCommandRuntime::new(AfterCommandConfig {
         hook: hook.clone(),
@@ -441,7 +437,7 @@ fn panic_payload<'a>(info: &'a PanicHookInfo<'a>) -> Cow<'a, str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{panic_report_path, stdin_record_size};
+    use super::{SourceBuildMode, build_source, panic_report_path, stdin_record_size};
     use twatch::cli::{Cli, DiffModeArg, ScreenshotFormatArg, SizeSpec, default_shell};
 
     #[test]
@@ -500,5 +496,56 @@ mod tests {
         };
 
         assert_eq!(stdin_record_size(&cli), (90, 30));
+    }
+
+    #[test]
+    fn build_source_rejects_empty_command_without_replay() {
+        let cli = Cli {
+            batch: false,
+            batch_count: None,
+            batch_size: None,
+            batch_crop: None,
+            batch_diff_only: false,
+            batch_no_color: false,
+            aftercommand: None,
+            keymap: Vec::new(),
+            bind: Vec::new(),
+            aftercommand_regex: None,
+            aftercommand_change_cells: None,
+            aftercommand_every: None,
+            aftercommand_debounce_ms: None,
+            aftercommand_timeout_ms: 3000,
+            compress: false,
+            logfile: None,
+            replay: None,
+            pack_logfile: None,
+            pack_output: None,
+            record_stdin: false,
+            record_stdin_spill_every: 64,
+            record_stdin_spill_retain: 32,
+            size: None,
+            screenshot_dir: "/tmp".to_string(),
+            screenshot_format: ScreenshotFormatArg::Text,
+            snapshot_on: None,
+            snapshot_on_regex: None,
+            snapshot_on_change_cells: None,
+            snapshot_once: false,
+            shell: default_shell(),
+            differences: DiffModeArg::None,
+            limit: 500,
+            checkpoint_interval: 12,
+            debug: false,
+            hide_header: false,
+            replay_indicator: true,
+            command: Vec::new(),
+        };
+
+        let err = build_source(&cli, SourceBuildMode::Interactive, 80, 24)
+            .err()
+            .expect("empty command should be rejected");
+        assert_eq!(
+            err.to_string(),
+            "command is required unless --replay is used"
+        );
     }
 }

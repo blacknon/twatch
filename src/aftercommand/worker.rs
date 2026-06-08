@@ -227,7 +227,7 @@ mod tests {
         let _ = fs::remove_file(&path);
 
         let payload = AfterCommandPayload {
-            command: "demo".to_string(),
+            command: "test-command".to_string(),
             changed: true,
             output: "output".to_string(),
             unix_timestamp: 1,

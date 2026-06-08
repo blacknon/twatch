@@ -128,7 +128,7 @@ mod tests {
         AfterCommandRuntime::new(AfterCommandConfig {
             hook: "echo noop".to_string(),
             shell: "sh -c".to_string(),
-            command_display: "demo".to_string(),
+            command_display: "test-command".to_string(),
             regex: None,
             changed_cells: None,
             every: None,
@@ -161,7 +161,7 @@ mod tests {
         let mut runtime = AfterCommandRuntime::new(AfterCommandConfig {
             hook: "echo noop".to_string(),
             shell: "sh -c".to_string(),
-            command_display: "demo".to_string(),
+            command_display: "test-command".to_string(),
             regex: Some(regex::Regex::new("panic").unwrap()),
             changed_cells: Some(10),
             every: None,
@@ -191,7 +191,7 @@ mod tests {
         let mut runtime = AfterCommandRuntime::new(AfterCommandConfig {
             hook: "echo noop".to_string(),
             shell: "sh -c".to_string(),
-            command_display: "demo".to_string(),
+            command_display: "test-command".to_string(),
             regex: None,
             changed_cells: None,
             every: Some(1),
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn payload_serializes_debug_fields() {
         let payload = AfterCommandPayload {
-            command: "demo".to_string(),
+            command: "test-command".to_string(),
             changed: true,
             output: "panic".to_string(),
             unix_timestamp: 1,
